@@ -59,3 +59,12 @@ def test_static_universe_starts_websocket_without_a_rest_universe_request() -> N
     assert provider.symbols == FALLBACK_USDT_PERPETUALS
     assert len(provider.symbols) == 50
     assert provider.symbols[:5] == ("BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "ADAUSDT")
+
+
+def test_raw_websocket_subscription_uses_documented_binance_frame() -> None:
+    provider = BinanceFuturesProvider(replace(make_config("binance_futures")))
+    assert provider.subscription_frame(("BTCUSDT", "ETHUSDT"), request_id=1) == {
+        "method": "SUBSCRIBE",
+        "params": ["btcusdt@aggTrade", "ethusdt@aggTrade"],
+        "id": 1,
+    }

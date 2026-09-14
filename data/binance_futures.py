@@ -7,6 +7,7 @@ https://developers.binance.com/docs/derivatives/usds-margined-futures
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from collections.abc import AsyncIterator
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -54,6 +55,7 @@ class BinanceFuturesProvider(RealTimeProvider, HistoricalProvider):
         self._history: dict[tuple[str, str], list[Candle]] = {}
         self._previous_closes: dict[str, float] = {}
         self._first_tick_logged = False
+        self._raw_frames_logged = 0
 
     @property
     def health(self) -> ProviderHealth:
@@ -122,20 +124,23 @@ class BinanceFuturesProvider(RealTimeProvider, HistoricalProvider):
     async def stream(self) -> AsyncIterator[MarketTick]:
         if not self.symbols:
             await self.connect()
-        streams = "/".join(f"{symbol.lower()}@aggTrade" for symbol in self.symbols)
-        url = f"{self.config.binance_websocket_url}/stream?streams={streams}"
+        url = f"{self.config.binance_websocket_url.rstrip('/')}/ws"
         failures = 0
+        btc_probe = False
         while True:
             try:
                 async with websockets.connect(url, ping_interval=20, close_timeout=5) as socket:
                     self._monitor.mark_connected()
                     failures = 0
-                    logger.info("Binance Futures WebSocket connected: aggTrade streams=%s", len(self.symbols))
+                    active_symbols = ("BTCUSDT",) if btc_probe else self.symbols
+                    await socket.send(json.dumps(self.subscription_frame(active_symbols, request_id=1)))
+                    logger.info("Binance Futures WebSocket connected: aggTrade streams=%s", len(active_symbols))
                     while True:
                         raw_message = await asyncio.wait_for(
                             socket.recv(),
                             timeout=self.config.stale_after_seconds,
                         )
+                        self._log_raw_frame(raw_message)
                         tick = self.parse_message(raw_message)
                         if tick and self._validator.validate(tick).accepted:
                             self._monitor.record_tick(tick, real_time=True)
@@ -147,16 +152,43 @@ class BinanceFuturesProvider(RealTimeProvider, HistoricalProvider):
                                     tick.timestamp.isoformat(),
                                 )
                                 self._first_tick_logged = True
+                            if btc_probe:
+                                await self._subscribe_remaining_symbols(socket)
+                                btc_probe = False
                             yield tick
             except (OSError, websockets.WebSocketException, asyncio.TimeoutError):
                 self._monitor.mark_error("Binance Futures stream unavailable")
+                if not btc_probe:
+                    logger.warning("Binance 50-stream subscription was silent; probing BTCUSDT")
+                    btc_probe = True
                 failures += 1
                 await asyncio.sleep(min(self.config.reconnect_backoff_seconds * 2 ** (failures - 1), 60))
 
+    def subscription_frame(self, symbols: tuple[str, ...], request_id: int) -> dict[str, object]:
+        """Documented Binance raw WebSocket SUBSCRIBE frame."""
+        return {
+            "method": "SUBSCRIBE",
+            "params": [f"{symbol.lower()}@aggTrade" for symbol in symbols],
+            "id": request_id,
+        }
+
+    async def _subscribe_remaining_symbols(self, socket: Any) -> None:
+        remaining = tuple(symbol for symbol in self.symbols if symbol != "BTCUSDT")
+        for request_id, start in enumerate(range(0, len(remaining), 25), start=2):
+            batch = remaining[start:start + 25]
+            await socket.send(json.dumps(self.subscription_frame(batch, request_id)))
+        logger.info("Binance BTCUSDT probe succeeded; requested remaining streams in two batches")
+
+    def _log_raw_frame(self, raw_message: str | bytes) -> None:
+        """Log only the first public frames, truncated to prevent noisy terminals."""
+        if self._raw_frames_logged >= 2:
+            return
+        preview = raw_message.decode() if isinstance(raw_message, bytes) else raw_message
+        logger.info("Binance WebSocket raw frame: %s", preview[:240])
+        self._raw_frames_logged += 1
+
     def parse_message(self, raw_message: str | bytes | dict[str, Any]) -> MarketTick | None:
         if isinstance(raw_message, (str, bytes)):
-            import json
-
             try:
                 payload = json.loads(raw_message)
             except (TypeError, json.JSONDecodeError):
