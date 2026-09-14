@@ -61,7 +61,7 @@ Gösterge serileri başlangıçta yfinance'ın gecikmeli günlük mumlarıyla pr
 - `data/`: bağımsız `DataProvider` sözleşmesi, `MockProvider`, dxFeed dxLink ve iTick BIST 100 rotasyon adaptörü, yfinance geçmiş-primer'ı, tick doğrulama ve bağlantı sağlığı
 - `indicators/`: EMA/SMA/ADX/DI, RSI/MACD/Stochastic/Williams %R/CCI/ROC, ATR/Bollinger, VWAP/OBV/hacim ve fiyat-mum yapısı
 - `strategy/`: ağırlıklı 0–100 skor, BIST 100 piyasa rejimi ve göreli güç
-- `risk/`: ATR + swing stop ile 1R/2R/3R analitik hedefleri
+- `risk/`: teyitli swing + ATR stopu, %4 maksimum zarar filtresi ve en az 1:3 yapısal risk/ödül hedefleri
 - `notifications/`: gerçek-zamanlılık kapılı Telegram Bot API bildirimi
 - `dashboard/`: mobil uyumlu FastAPI paneli ve sembol bazlı WebSocket güncellemeleri
 - `backtest/`: aynı sinyal motoru ile komisyon/slippage destekli uzun yönlü simülasyon ve performans metrikleri

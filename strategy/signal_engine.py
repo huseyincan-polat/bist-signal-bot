@@ -8,8 +8,7 @@ from datetime import UTC, datetime, timedelta
 from app.config import AppConfig
 from data.models import Candle, MarketTick, Signal, SignalState
 from indicators import momentum, patterns, price_action, trend, volatility, volume
-from risk.stops import stop_price
-from risk.targets import targets
+from risk.targets import structure_risk_plan
 from strategy.market_regime import classify_market_regime
 from strategy.relative_strength import relative_strength, score as relative_score
 from strategy.scoring import aggregate, classify, is_bullish, meaningful_transition
@@ -181,11 +180,21 @@ class SignalEngine:
             int(self.config.scoring.get("bearish_regime_penalty", 12)),
         )
         state = classify(score, self.config.scoring.get("buckets"))
-        bullish = is_bullish(state)
-        stop = stop_price(
-            tick.price, volatility_values["atr_14"], structure["support"], structure["resistance"], bullish
-        )
+        risk_plan = None
+        if state is not SignalState.WAIT:
+            bullish = is_bullish(state)
+            risk_plan = structure_risk_plan(
+                tick.price,
+                volatility_values["atr_14"],
+                structure["swing_low"],
+                structure["swing_high"],
+                bullish,
+            )
+            if not risk_plan.valid:
+                state = SignalState.WAIT
         reasons = self._reasons(trend_values, momentum_values, volume_values, structure, candle_patterns, rs)
+        if risk_plan and not risk_plan.valid:
+            reasons.append(f"Risk filtresi: {risk_plan.reason}")
         metrics: dict[str, float | str | None] = {
             "rsi": momentum_values["rsi_14"],
             "macd": momentum_values["macd"],
@@ -198,6 +207,7 @@ class SignalEngine:
             "relative_strength": rs,
             "market_regime": self.market_regime,
             "data_quality": "LIVE" if tick.source == self.provider_name else "DELAYED_HISTORICAL",
+            "reward_to_risk": risk_plan.reward_to_risk if risk_plan else None,
         }
         return Signal(
             symbol=tick.symbol,
@@ -205,8 +215,8 @@ class SignalEngine:
             confidence=score,
             price=round(tick.price, 2),
             entry=round(tick.price, 2),
-            stop=stop,
-            targets=targets(tick.price, stop, bullish),
+            stop=risk_plan.stop if risk_plan and risk_plan.valid else None,
+            targets=risk_plan.targets if risk_plan and risk_plan.valid else (None, None, None),
             reasons=reasons,
             data_timestamp=tick.timestamp,
             generated_at=datetime.now(UTC),
@@ -245,6 +255,8 @@ class SignalEngine:
 
     def should_notify(self, signal: Signal) -> bool:
         previous = self._pending_previous.pop(signal.symbol, None)
+        if signal.state is SignalState.WAIT:
+            return False
         last_alert = self._last_alert_at.get(signal.symbol)
         cooldown_elapsed = not last_alert or datetime.now(UTC) - last_alert >= timedelta(minutes=self.config.signal_cooldown_minutes)
         if cooldown_elapsed and meaningful_transition(previous, signal.state):

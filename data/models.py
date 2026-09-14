@@ -106,8 +106,8 @@ class Signal:
     confidence: int
     price: float
     entry: float
-    stop: float
-    targets: tuple[float, float, float]
+    stop: float | None
+    targets: tuple[float | None, float | None, float | None]
     reasons: list[str]
     data_timestamp: datetime
     generated_at: datetime
