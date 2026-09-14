@@ -31,7 +31,8 @@ class ITickRealTimeProvider(RealTimeProvider):
     """Streams the configured iTick Turkish-stock watchlist."""
 
     name = "iTick stock WebSocket"
-    THYAO_FORMAT_CANDIDATES = ("THYAO$TR", "THYAO", "THYAO.IS", "THYAO.E")
+    INITIAL_POOL = ("THYAO", "EREGL", "KCHOL")
+    FALLBACK_POOL = ("THYAO", "EREGL")
 
     def __init__(self, config: AppConfig) -> None:
         self.config = config
@@ -42,6 +43,8 @@ class ITickRealTimeProvider(RealTimeProvider):
         self._last_message_at: datetime | None = None
         self._first_live_tick_logged = False
         self.accepted_ticker_format: str | None = None
+        self.accepted_symbols: tuple[str, ...] = ()
+        self.maximum_working_symbol_count = 0
 
     @property
     def health(self) -> ProviderHealth:
@@ -68,9 +71,12 @@ class ITickRealTimeProvider(RealTimeProvider):
             raise RuntimeError("ITICK_API_KEY and iTick symbols are required")
 
     def subscription_candidates(self) -> tuple[str, ...]:
-        """Try documented `$TR` first, then user-requested THYAO compatibility forms."""
-        if self.symbols == ("THYAO",):
-            return self.THYAO_FORMAT_CANDIDATES
+        """Try the configured documented pool, then its documented two-symbol subset."""
+        if self.symbols == self.INITIAL_POOL:
+            return tuple(
+                ",".join(f"{symbol}${self.config.itick_region}" for symbol in pool)
+                for pool in (self.INITIAL_POOL, self.FALLBACK_POOL)
+            )
         return (",".join(f"{symbol}${self.config.itick_region}" for symbol in self.symbols),)
 
     def subscription_payload(self, codes: str | None = None) -> dict[str, str]:
@@ -104,16 +110,22 @@ class ITickRealTimeProvider(RealTimeProvider):
                             pending_format = await self._subscribe_next(socket, candidates)
                             continue
                         if self._subscription_failed(message):
-                            logger.warning(
-                                "iTick subscription rejected: format=%s code=%s",
-                                pending_format,
-                                message.get("code"),
-                            )
+                            self._log_pool_result("rejected", pending_format, message.get("code"))
                             pending_format = await self._subscribe_next(socket, candidates)
                             continue
                         if self._subscription_succeeded(message):
                             self.accepted_ticker_format = pending_format
-                            logger.info("iTick subscription accepted: format=%s", pending_format)
+                            self.accepted_symbols = self._local_symbols(pending_format)
+                            self.maximum_working_symbol_count = max(
+                                self.maximum_working_symbol_count, len(self.accepted_symbols)
+                            )
+                            self._monitor.health.expected_symbols = set(self.accepted_symbols)
+                            self._monitor.health.symbols_received.clear()
+                            self._log_pool_result("accepted", pending_format, message.get("code"))
+                            logger.info(
+                                "iTick maximum working subscription count=%s",
+                                self.maximum_working_symbol_count,
+                            )
                             pending_format = None
                             continue
                         tick = self.parse_message(message)
@@ -152,10 +164,28 @@ class ITickRealTimeProvider(RealTimeProvider):
         try:
             ticker_format = next(candidates)
         except StopIteration as error:
-            raise PermissionError("iTick rejected every THYAO ticker format") from error
+            raise PermissionError("iTick rejected every configured subscription pool") from error
         await socket.send(json.dumps(self.subscription_payload(ticker_format)))
-        logger.info("iTick subscription requested: format=%s", ticker_format)
+        logger.info("iTick subscription requested: symbols=%s", ticker_format)
         return ticker_format
+
+    @staticmethod
+    def _local_symbols(codes: str | None) -> tuple[str, ...]:
+        if not codes:
+            return ()
+        return tuple(code.split("$")[0].split(".")[0] for code in codes.split(","))
+
+    def _log_pool_result(self, outcome: str, codes: str | None, response_code: object) -> None:
+        """iTick acknowledges a pool, not individual symbols; log each member accurately."""
+        pool = self._local_symbols(codes)
+        for symbol in pool:
+            logger.info(
+                "iTick subscription %s: symbol=%s pool_size=%s response_code=%s",
+                outcome,
+                symbol,
+                len(pool),
+                response_code,
+            )
 
     def _socket(self) -> Any:
         """Use the documented `token` WebSocket header without exposing it in logs."""

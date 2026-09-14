@@ -50,7 +50,7 @@ Demo uç noktası BIST gerçek zamanlı sinyalleri için kullanılmaz; demo/veri
 
 ## iTick BIST 30 sağlayıcısı
 
-`DATA_PROVIDER=itick` seçildiğinde uygulama yalnızca `config.yaml` içindeki iTick havuzuna abone olur. BIST 100 takip listesi dxFeed/mock akışları için korunur; iTick adaptörü 100 sembole abone olmaz. Mevcut tanılama havuzu tek semboldür (`THYAO`): abonelik reddedilirse adaptör sırasıyla `THYAO$TR`, `THYAO`, `THYAO.IS` ve `THYAO.E` biçimlerini dener.
+`DATA_PROVIDER=itick` seçildiğinde uygulama yalnızca `config.yaml` içindeki iTick havuzuna abone olur. BIST 100 takip listesi dxFeed/mock akışları için korunur; iTick adaptörü 100 sembole abone olmaz. Mevcut havuz `THYAO$TR`, `EREGL$TR`, `KCHOL$TR`'dir; bu havuz reddedilirse adaptör belgelenmiş iki sembollü alt kümeyi (`THYAO$TR`, `EREGL$TR`) dener.
 
 Adaptör, iTick'in [resmî WebSocket belgelerindeki](https://docs.itick.org/en/websocket/stocks) ürün uç noktasını (`wss://api-free.itick.org/stock`), `token` WebSocket üstbilgisini ve `SYMBOL$TR` abonelik biçimini kullanır. `quote,tick,depth` yanıtları yayımlanan `data.s`, `data.ld`, `data.t` ve `data.v` alanlarından ayrıştırılır. iTick'in [Türkiye entegrasyon rehberi](https://blog.itick.org/en/stock-api/turkey-stock-api-bist-real-time-depth-historical-data-technical) BIST için `$TR` biçimini ve bu akışı doğrular.
 

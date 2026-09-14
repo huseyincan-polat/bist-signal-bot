@@ -9,10 +9,10 @@ from data.itick_provider import ITickRealTimeProvider
 def make_itick_provider() -> ITickRealTimeProvider:
     config = AppConfig(
         provider_name="itick",
-        symbols=("THYAO",),
+        symbols=("THYAO", "EREGL", "KCHOL"),
         index_symbol="XU100:TR",
         itick_api_key="test-key",
-        itick_symbols=("THYAO",),
+        itick_symbols=("THYAO", "EREGL", "KCHOL"),
         itick_region="TR",
     )
     return ITickRealTimeProvider(config)
@@ -22,23 +22,21 @@ def test_itick_subscription_uses_documented_turkish_symbol_format() -> None:
     provider = make_itick_provider()
     assert provider.subscription_payload() == {
         "ac": "subscribe",
-        "params": "THYAO$TR",
+        "params": "THYAO$TR,EREGL$TR,KCHOL$TR",
         "types": "quote,tick,depth",
     }
 
 
-def test_itick_uses_the_temporary_one_symbol_diagnostic_pool() -> None:
+def test_itick_uses_the_three_symbol_pool() -> None:
     config = load_config("config.yaml")
-    assert config.itick_symbols == ("THYAO",)
+    assert config.itick_symbols == ("THYAO", "EREGL", "KCHOL")
     assert set(config.itick_symbols) < set(config.symbols)
 
 
-def test_itick_tries_ticker_formats_in_requested_order() -> None:
+def test_itick_retries_the_documented_two_symbol_subset() -> None:
     assert make_itick_provider().subscription_candidates() == (
-        "THYAO$TR",
-        "THYAO",
-        "THYAO.IS",
-        "THYAO.E",
+        "THYAO$TR,EREGL$TR,KCHOL$TR",
+        "THYAO$TR,EREGL$TR",
     )
 
 
@@ -54,12 +52,15 @@ def test_itick_sends_next_ticker_format_after_rejection() -> None:
         provider = make_itick_provider()
         socket = RecordingSocket()
         candidates = iter(provider.subscription_candidates())
-        assert await provider._subscribe_next(socket, candidates) == "THYAO$TR"
-        assert await provider._subscribe_next(socket, candidates) == "THYAO"
+        assert await provider._subscribe_next(socket, candidates) == "THYAO$TR,EREGL$TR,KCHOL$TR"
+        assert await provider._subscribe_next(socket, candidates) == "THYAO$TR,EREGL$TR"
         return socket
 
     socket = asyncio.run(subscribe_twice())
-    assert [message["params"] for message in socket.messages] == ["THYAO$TR", "THYAO"]
+    assert [message["params"] for message in socket.messages] == [
+        "THYAO$TR,EREGL$TR,KCHOL$TR",
+        "THYAO$TR,EREGL$TR",
+    ]
 
 
 def test_itick_parse_maps_published_depth_and_tick_fields() -> None:

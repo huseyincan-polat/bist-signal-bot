@@ -20,7 +20,7 @@ class AppConfig:
     startup_warmup_seconds: int = 8
     reconnect_backoff_seconds: int = 3
     signal_cooldown_minutes: int = 20
-    dashboard_host: str = "127.0.0.1"
+    dashboard_host: str = "0.0.0.0"
     dashboard_port: int = 8347
     telegram_enabled: bool = False
     telegram_bot_token: str | None = None
@@ -68,7 +68,7 @@ def load_config(path: str | Path = "config.yaml") -> AppConfig:
         startup_warmup_seconds=int(runtime.get("startup_warmup_seconds", 8)),
         reconnect_backoff_seconds=int(runtime.get("reconnect_backoff_seconds", 3)),
         signal_cooldown_minutes=int(runtime.get("signal_cooldown_minutes", 20)),
-        dashboard_host=dashboard.get("host", "127.0.0.1"),
+        dashboard_host=dashboard.get("host", "0.0.0.0"),
         dashboard_port=int(dashboard.get("port", 8347)),
         telegram_enabled=bool(telegram.get("enabled", False)),
         telegram_bot_token=_read_env("TELEGRAM_BOT_TOKEN"),
