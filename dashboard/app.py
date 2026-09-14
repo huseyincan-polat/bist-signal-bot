@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from typing import Any, AsyncContextManager, Callable
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 
 from app.config import AppConfig
 from data.models import MarketTick, ProviderHealth, Signal, SignalState
@@ -169,9 +169,17 @@ def create_dashboard(
     async def index() -> str:
         return DASHBOARD_HTML
 
+    @api.head("/")
+    async def index_head() -> Response:
+        return Response(status_code=200)
+
     @api.get("/api/state")
     async def get_state() -> dict[str, Any]:
         return state.state()
+
+    @api.head("/api/state")
+    async def state_head() -> Response:
+        return Response(status_code=200)
 
     @api.websocket("/ws")
     async def updates(websocket: WebSocket) -> None:

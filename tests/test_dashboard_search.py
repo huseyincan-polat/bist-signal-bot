@@ -1,5 +1,8 @@
 from dataclasses import replace
 
+from fastapi.testclient import TestClient
+
+from app.main import build_application
 from dashboard.app import DASHBOARD_HTML, DashboardState
 from data.historical import synthetic_candles
 from data.models import DataState, MarketTick
@@ -38,6 +41,14 @@ def test_dashboard_calculates_previous_close_price_change() -> None:
     row = dashboard._row("BTCUSDT", None)
     assert row["price_change"] == 1080
     assert row["price_change_pct"] == 1.5
+
+
+def test_head_requests_return_200_for_uptime_monitors() -> None:
+    client = TestClient(build_application().api)
+    for path in ("/", "/api/state"):
+        response = client.head(path)
+        assert response.status_code == 200
+        assert response.content in (b"", None)
 
 
 def test_non_realtime_provider_rows_are_never_labelled_live() -> None:
