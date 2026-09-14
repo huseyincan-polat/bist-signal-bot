@@ -9,6 +9,7 @@ from threading import Lock
 from typing import Any
 
 from data.models import Candle
+from data.models import MarketTick
 
 _YFINANCE_CACHE: dict[tuple[str, ...], tuple[datetime, dict[str, list[Candle]]]] = {}
 _YFINANCE_CACHE_LOCK = Lock()
@@ -97,6 +98,58 @@ def fetch_yfinance_history(
     with _YFINANCE_CACHE_LOCK:
         _YFINANCE_CACHE[cache_key] = (datetime.now(UTC), result)
     return result
+
+
+def fetch_yfinance_batch_quotes(symbols: list[str]) -> list[MarketTick]:
+    """Fetch the latest available one-minute bars in one delayed Yahoo batch.
+
+    The caller owns freshness classification. This helper is intentionally
+    synchronous so it can run entirely in a worker thread.
+    """
+    try:
+        import yfinance as yf
+    except ImportError as error:
+        raise RuntimeError("yfinance must be installed for batch quotes") from error
+
+    ticker_map = {symbol: yfinance_ticker(symbol) for symbol in symbols}
+    raw = yf.download(
+        list(ticker_map.values()),
+        period="1d",
+        interval="1m",
+        auto_adjust=False,
+        group_by="ticker",
+        progress=False,
+        threads=True,
+    )
+    ticks: list[MarketTick] = []
+    for symbol, ticker in ticker_map.items():
+        frame = _ticker_frame(raw, ticker)
+        if frame is None or getattr(frame, "empty", True):
+            continue
+        try:
+            timestamp, row = next(reversed(list(frame.iterrows())))
+            values = {str(key).lower(): row[key] for key in row.index}
+            close = values.get("close")
+            volume = values.get("volume")
+            if not _is_number(close):
+                continue
+            timestamp = timestamp.to_pydatetime()
+            if timestamp.tzinfo is None:
+                timestamp = timestamp.replace(tzinfo=UTC)
+            else:
+                timestamp = timestamp.astimezone(UTC)
+            ticks.append(
+                MarketTick(
+                    symbol=symbol,
+                    price=float(close),
+                    timestamp=timestamp,
+                    total_volume=float(volume) if _is_number(volume) else None,
+                    source="yfinance delayed batch",
+                )
+            )
+        except (AttributeError, KeyError, StopIteration, TypeError, ValueError):
+            continue
+    return ticks
 
 
 def _ticker_frame(raw: Any, ticker: str) -> Any:

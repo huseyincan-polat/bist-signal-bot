@@ -22,6 +22,7 @@ class DataProvider(ABC):
 
     name: str
     is_real_time: bool = False
+    allows_delayed_analysis: bool = False
 
     @abstractmethod
     async def connect(self) -> None: ...
@@ -213,10 +214,10 @@ class DxFeedProvider(RealTimeProvider, HistoricalProvider):
 
 
 def create_provider(config: AppConfig) -> DataProvider:
-    if config.provider_name == "itick":
-        from data.itick_provider import ITickRealTimeProvider
+    if config.provider_name == "batch_yfinance":
+        from data.yfinance_provider import YahooBatchProvider
 
-        return ITickRealTimeProvider(config)
+        return YahooBatchProvider(config)
     if config.provider_name == "dxfeed":
         return DxFeedProvider(config)
     if config.provider_name == "mock":

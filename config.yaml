@@ -1,5 +1,5 @@
-# Values here are safe defaults for local development. Keep credentials in .env.
-data_provider: mock
+# yfinance batch quotes are delayed by default and never unlock REAL_TIME on their own.
+data_provider: batch_yfinance
 runtime:
   stale_after_seconds: 45
   startup_warmup_seconds: 8
@@ -16,18 +16,9 @@ dxfeed:
   websocket_url_env: DXFEED_WS_URL
   token_env: DXFEED_TOKEN
   index_symbol: XU100:TR
-itick:
-  # Official stock endpoint. iTick documents authentication through the token
-  # WebSocket header and Turkish stock codes as SYMBOL$TR.
-  websocket_url_env: ITICK_WS_URL
-  websocket_url: wss://api-free.itick.org/stock
-  api_key_env: ITICK_API_KEY
-  region: TR
-  # The universe is the full `bist100.symbols` list below. iTick rotates it
-  # in small, documented subscription groups to respect free-tier limits.
-  group_size: 3
-  group_listen_seconds: 5
-  group_transition_seconds: 5
+batch_yfinance:
+  # One concurrent batch request; no per-symbol request loop.
+  poll_seconds: 1
 scoring:
   bullish_regime_penalty: 0
   bearish_regime_penalty: 12

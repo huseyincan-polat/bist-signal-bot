@@ -28,13 +28,7 @@ class AppConfig:
     telegram_chat_id: str | None = None
     dxfeed_websocket_url: str | None = None
     dxfeed_token: str | None = None
-    itick_websocket_url: str = "wss://api-free.itick.org/stock"
-    itick_api_key: str | None = None
-    itick_symbols: tuple[str, ...] = ()
-    itick_region: str = "TR"
-    itick_group_size: int = 3
-    itick_group_listen_seconds: int = 3
-    itick_group_transition_seconds: int = 5
+    batch_poll_seconds: float = 1.0
     scoring: dict[str, Any] = field(default_factory=dict)
     backtest: dict[str, Any] = field(default_factory=dict)
 
@@ -43,9 +37,6 @@ class AppConfig:
         return bool(self.dxfeed_websocket_url and self.dxfeed_token)
 
     @property
-    def is_itick_configured(self) -> bool:
-        return bool(self.itick_websocket_url and self.itick_api_key and self.itick_symbols)
-
 
 def _read_env(name: str, default: str | None = None) -> str | None:
     value = os.getenv(name, default)
@@ -69,7 +60,7 @@ def load_config(path: str | Path = "config.yaml") -> AppConfig:
     dashboard = raw.get("dashboard", {})
     telegram = raw.get("telegram", {})
     dxfeed = raw.get("dxfeed", {})
-    itick = raw.get("itick", {})
+    batch = raw.get("batch_yfinance", {})
     provider_name = (_read_env("DATA_PROVIDER", raw.get("data_provider", "mock")) or "mock").lower()
     return AppConfig(
         provider_name=provider_name,
@@ -87,19 +78,7 @@ def load_config(path: str | Path = "config.yaml") -> AppConfig:
         telegram_chat_id=_read_env("TELEGRAM_CHAT_ID"),
         dxfeed_websocket_url=_read_env(dxfeed.get("websocket_url_env", "DXFEED_WS_URL")),
         dxfeed_token=_read_env(dxfeed.get("token_env", "DXFEED_TOKEN")),
-        itick_websocket_url=(
-            _read_env(
-                itick.get("websocket_url_env", "ITICK_WS_URL"),
-                itick.get("websocket_url", "wss://api-free.itick.org/stock"),
-            )
-            or "wss://api-free.itick.org/stock"
-        ),
-        itick_api_key=_read_env(itick.get("api_key_env", "ITICK_API_KEY")),
-        itick_symbols=tuple(itick.get("symbols", raw.get("bist100", {}).get("symbols", []))),
-        itick_region=itick.get("region", "TR"),
-        itick_group_size=int(itick.get("group_size", 3)),
-        itick_group_listen_seconds=int(itick.get("group_listen_seconds", 3)),
-        itick_group_transition_seconds=int(itick.get("group_transition_seconds", 5)),
+        batch_poll_seconds=float(batch.get("poll_seconds", 1)),
         scoring=raw.get("scoring", {}),
         backtest=raw.get("backtest", {}),
     )

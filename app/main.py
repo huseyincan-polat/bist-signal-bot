@@ -59,7 +59,7 @@ class SignalBotApplication:
                     self.engine.seed_history(symbol, timeframe, candles)
 
     async def _prime_history(self) -> None:
-        """Prime delayed daily bars before a successful live iTick group activates signals."""
+        """Prime delayed daily bars before the batch scanner activates analysis."""
         self._seed_provider_history()
         try:
             symbols = list(self.config.symbols) + [self.config.index_symbol.split(":")[0]]
@@ -90,7 +90,10 @@ class SignalBotApplication:
                 health = self.provider.health
                 self.dashboard.record_tick(tick)
                 # Steps 2–4 are satisfied only by accepted, current ticks for every symbol.
-                if self.history_primed and health.ready_for_signals and not self._provider_ready:
+                analysis_data_ready = health.ready_for_signals or (
+                    self.provider.allows_delayed_analysis and health.connected
+                )
+                if self.history_primed and analysis_data_ready and not self._provider_ready:
                     primed_signals = self.engine.prime_from_history()
                     self.engine_started = True
                     self._provider_ready = True
@@ -99,10 +102,10 @@ class SignalBotApplication:
                         primed_signals,
                     )
                     await self.dashboard.broadcast_state()
-                elif not health.ready_for_signals:
+                elif not analysis_data_ready:
                     self._provider_ready = False
                 # Mock, delayed, stale, partial, and disconnected data cannot run the engine.
-                if not self.engine_started or not health.ready_for_signals:
+                if not self.engine_started or not analysis_data_ready:
                     if tick.symbol in self.config.symbols:
                         await self.dashboard.publish(tick.symbol)
                     continue

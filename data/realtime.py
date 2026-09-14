@@ -74,11 +74,16 @@ class ConnectionMonitor:
             self.health.data_state = DataState.UNAVAILABLE
             self.health.symbols_received.clear()
 
-    def record_tick(self, tick: MarketTick, real_time: bool) -> None:
+    def record_tick(
+        self,
+        tick: MarketTick,
+        real_time: bool,
+        data_state: DataState | None = None,
+    ) -> None:
         self.health.last_data_at = tick.timestamp
         self.health.last_data_by_symbol[tick.symbol] = tick.timestamp
         self.health.symbols_received.add(tick.symbol)
-        self.health.data_state = DataState.REAL_TIME if real_time else DataState.MOCK
+        self.health.data_state = data_state or (DataState.REAL_TIME if real_time else DataState.MOCK)
 
     def refresh_freshness(self, now: datetime | None = None) -> ProviderHealth:
         now = now or datetime.now(UTC)

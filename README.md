@@ -48,17 +48,15 @@ Demo uç noktası BIST gerçek zamanlı sinyalleri için kullanılmaz; demo/veri
 
 `config.yaml` BIST 100 takip listesini içerir. Endeks bileşenleri değiştiğinde, bu listeyi sağlayıcının yetkili enstrüman profiline göre gözden geçirin.
 
-## iTick BIST 100 rotasyon sağlayıcısı
+## Gecikmeli BIST 100 tarayıcısı
 
-`DATA_PROVIDER=itick` seçildiğinde uygulama, BIST 100 listesini iTick `SYMBOL$TR` biçimine çevirir. Ücretsiz katman limiti için tüm evren aynı anda abone edilmez: uygulama 3 sembollü grupları sırayla abone eder, birkaç saniye dinler, son kotasyonları bellekte saklar, belgelenmiş `unsubscribe` çerçevesini gönderir ve sonraki gruba geçer. Bir grubun canlı tick'i geldikten sonra sinyal motoru başlar; Telegram yalnızca sembolün son canlı tick'i tam bir rotasyondan yeni ise bildirim gönderebilir.
+`DATA_PROVIDER=batch_yfinance` seçildiğinde uygulama BIST 100 + ALTINS1 için tek bir paralel yfinance isteğiyle en son bir dakikalık barları tarar. İstek bir iş parçacığında çalışır; uygulama döngüsünü veya arayüzü engellemez. Günlük geçmiş mumları da yalnızca gösterge serilerini hazırlamak için önbelleklenir.
 
-Adaptör, iTick'in [resmî WebSocket belgelerindeki](https://docs.itick.org/en/websocket/stocks) ürün uç noktasını (`wss://api-free.itick.org/stock`), `token` WebSocket üstbilgisini ve `SYMBOL$TR` abonelik biçimini kullanır. `quote,tick,depth` yanıtları yayımlanan `data.s`, `data.ld`, `data.t` ve `data.v` alanlarından ayrıştırılır. iTick'in [Türkiye entegrasyon rehberi](https://blog.itick.org/en/stock-api/turkey-stock-api-bist-real-time-depth-historical-data-technical) BIST için `$TR` biçimini ve bu akışı doğrular.
-
-Gösterge serileri başlangıçta yfinance'ın gecikmeli günlük mumlarıyla priming yapılır (`THYAO.IS` gibi). Bu veri gerçek zamanlı olarak etiketlenmez. WebSocket kapanırsa panel `⚠️ REAL-TIME DATA NOT AVAILABLE` kilidine döner; Telegram bildirimi gönderilmez. Tam rotasyondan eski semboller tabloda `BAYAT` olarak işaretlenir.
+yfinance verisi BIST için gecikmeli olabilir ve bu yüzden hiçbir zaman `REAL_TIME` olarak etiketlenmez. Panel `⚠️ REAL-TIME DATA NOT AVAILABLE` kilidini korur; Telegram bildirimi gönderilmez. Saniye seviyesinde doğrulanmış BIST verisi için lisanslı bir gerçek-zamanlı sağlayıcı (örneğin dxFeed) gerekir.
 
 ## İçerik
 
-- `data/`: bağımsız `DataProvider` sözleşmesi, `MockProvider`, dxFeed dxLink ve iTick BIST 100 rotasyon adaptörü, yfinance geçmiş-primer'ı, tick doğrulama ve bağlantı sağlığı
+- `data/`: bağımsız `DataProvider` sözleşmesi, `MockProvider`, dxFeed dxLink, yfinance batch tarayıcısı, geçmiş-primer, tick doğrulama ve bağlantı sağlığı
 - `indicators/`: EMA/SMA/ADX/DI, RSI/MACD/Stochastic/Williams %R/CCI/ROC, ATR/Bollinger, VWAP/OBV/hacim ve fiyat-mum yapısı
 - `strategy/`: ağırlıklı 0–100 skor, BIST 100 piyasa rejimi ve göreli güç
 - `risk/`: teyitli swing + ATR stopu, %4 maksimum zarar filtresi ve en az 1:3 yapısal risk/ödül hedefleri
