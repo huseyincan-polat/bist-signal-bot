@@ -23,3 +23,15 @@ def test_connection_monitor_requires_all_symbols_and_current_realtime_ticks() ->
     monitor.record_tick(MarketTick("BBB", 10, now), real_time=True)
     assert monitor.health.ready_for_signals
     assert monitor.refresh_freshness(now + timedelta(seconds=11)).data_state is DataState.STALE_DATA
+
+
+def test_transient_reconnect_retains_only_fresh_realtime_state() -> None:
+    now = datetime.now(UTC)
+    monitor = ConnectionMonitor("vendor", {"AAA"}, 10, partial_coverage_allowed=True)
+    monitor.mark_connected()
+    monitor.record_tick(MarketTick("AAA", 10, now), real_time=True)
+    monitor.mark_transient_error("reconnecting", now + timedelta(seconds=2))
+    assert monitor.health.data_state is DataState.REAL_TIME
+    assert not monitor.health.connected
+    monitor.mark_transient_error("reconnecting", now + timedelta(seconds=11))
+    assert monitor.health.data_state is DataState.UNAVAILABLE

@@ -62,6 +62,18 @@ class ConnectionMonitor:
         self.health.last_error = message
         self.health.symbols_received.clear()
 
+    def mark_transient_error(self, message: str, now: datetime | None = None) -> None:
+        """Retain a recent verified stream state through one reconnect attempt."""
+        now = now or datetime.now(UTC)
+        self.health.connected = False
+        self.health.last_error = message
+        if (
+            self.health.last_data_at is None
+            or (now - self.health.last_data_at).total_seconds() > self.stale_after_seconds
+        ):
+            self.health.data_state = DataState.UNAVAILABLE
+            self.health.symbols_received.clear()
+
     def record_tick(self, tick: MarketTick, real_time: bool) -> None:
         self.health.last_data_at = tick.timestamp
         self.health.last_data_by_symbol[tick.symbol] = tick.timestamp

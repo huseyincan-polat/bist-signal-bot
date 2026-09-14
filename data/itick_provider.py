@@ -139,7 +139,7 @@ class ITickRealTimeProvider(RealTimeProvider):
                 await asyncio.sleep(self.group_transition_seconds)
                 continue
             except (OSError, websockets.WebSocketException, asyncio.TimeoutError, PermissionError, ConnectionError) as error:
-                self._monitor.mark_error("iTick stream unavailable")
+                self._monitor.mark_transient_error("iTick stream reconnecting")
                 consecutive_failures += 1
                 delay = min(self.config.reconnect_backoff_seconds * 2 ** (consecutive_failures - 1), 60)
                 # Class/code are safe diagnostic evidence; exception text may contain secrets.
