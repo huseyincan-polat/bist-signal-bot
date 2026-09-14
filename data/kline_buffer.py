@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections import defaultdict, deque
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 
 from data.models import Candle, MarketTick
 from indicators import price_action, volatility
@@ -14,6 +14,7 @@ from indicators.order_blocks import detect_order_block
 BUFFER_SIZE = 50
 MIN_BARS_FOR_SIGNALS = 5
 SEED_BARS = 5
+SYNTHETIC_TREND_PERIODS = ("15m", "1h", "4h", "daily")
 
 
 @dataclass
@@ -23,6 +24,45 @@ class StructureSnapshot:
     atr_14: float | None = None
     order_block_low: float | None = None
     order_block_high: float | None = None
+
+
+@dataclass(frozen=True)
+class SyntheticTrends:
+    trend_15m: str = "FLAT"
+    trend_1h: str = "FLAT"
+    trend_4h: str = "FLAT"
+    trend_daily: str = "FLAT"
+
+    def all_up(self, *periods: str) -> bool:
+        mapping = {
+            "15m": self.trend_15m,
+            "1h": self.trend_1h,
+            "4h": self.trend_4h,
+            "daily": self.trend_daily,
+        }
+        return all(mapping[period] == "UP" for period in periods)
+
+    def all_down(self, *periods: str) -> bool:
+        mapping = {
+            "15m": self.trend_15m,
+            "1h": self.trend_1h,
+            "4h": self.trend_4h,
+            "daily": self.trend_daily,
+        }
+        return all(mapping[period] == "DOWN" for period in periods)
+
+
+def _bucket_start(timestamp: datetime, period: str) -> datetime:
+    ts = timestamp.astimezone(UTC)
+    if period == "15m":
+        minute = (ts.minute // 15) * 15
+        return ts.replace(minute=minute, second=0, microsecond=0)
+    if period == "1h":
+        return ts.replace(minute=0, second=0, microsecond=0)
+    if period == "4h":
+        hour = (ts.hour // 4) * 4
+        return ts.replace(hour=hour, minute=0, second=0, microsecond=0)
+    return ts.replace(hour=0, minute=0, second=0, microsecond=0)
 
 
 class KlineBufferStore:
@@ -38,6 +78,8 @@ class KlineBufferStore:
         )
         self._structure: dict[str, StructureSnapshot] = {}
         self._seeded: set[str] = set()
+        self._period_bucket: dict[str, dict[str, datetime]] = defaultdict(dict)
+        self._period_opens: dict[str, dict[str, float]] = defaultdict(dict)
         self.kline_frames_received = 0
 
     def candles(self, symbol: str, timeframe: str) -> list[Candle]:
@@ -55,6 +97,45 @@ class KlineBufferStore:
 
     def symbols_with_full_buffers(self, size: int = BUFFER_SIZE) -> set[str]:
         return {symbol for symbol, frames in self._buffers.items() if len(frames["1m"]) >= size}
+
+    def reset_symbol(self, symbol: str) -> None:
+        self._buffers.pop(symbol, None)
+        self._structure.pop(symbol, None)
+        self._seeded.discard(symbol)
+        self._period_bucket.pop(symbol, None)
+        self._period_opens.pop(symbol, None)
+
+    def reset_symbols(self, symbols: list[str]) -> None:
+        for symbol in symbols:
+            self.reset_symbol(symbol)
+
+    def synthetic_trends(self, symbol: str, price: float) -> SyntheticTrends:
+        opens = self._period_opens.get(symbol, {})
+        trends: dict[str, str] = {}
+        for period in SYNTHETIC_TREND_PERIODS:
+            open_price = opens.get(period)
+            if open_price is None:
+                trends[period] = "FLAT"
+            elif price > open_price:
+                trends[period] = "UP"
+            elif price < open_price:
+                trends[period] = "DOWN"
+            else:
+                trends[period] = "FLAT"
+        return SyntheticTrends(
+            trend_15m=trends["15m"],
+            trend_1h=trends["1h"],
+            trend_4h=trends["4h"],
+            trend_daily=trends["daily"],
+        )
+
+    def _update_synthetic_trends(self, tick: MarketTick) -> SyntheticTrends:
+        for period in SYNTHETIC_TREND_PERIODS:
+            bucket = _bucket_start(tick.timestamp, period)
+            if self._period_bucket[tick.symbol].get(period) != bucket:
+                self._period_bucket[tick.symbol][period] = bucket
+                self._period_opens[tick.symbol][period] = tick.price
+        return self.synthetic_trends(tick.symbol, tick.price)
 
     def seed_from_tick(self, tick: MarketTick) -> StructureSnapshot | None:
         """Bootstrap five 1m bars from the first live mid so analysis can start immediately."""
@@ -113,6 +194,7 @@ class KlineBufferStore:
     def upsert_from_tick(self, tick: MarketTick) -> StructureSnapshot | None:
         """Update the live 1m bar from bookTicker; seed first if needed."""
         self.seed_from_tick(tick)
+        self._update_synthetic_trends(tick)
         minute = tick.timestamp.replace(second=0, microsecond=0)
         buffer = self._buffers[tick.symbol]["1m"]
         if buffer and buffer[-1].timestamp == minute:

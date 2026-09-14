@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from datetime import UTC, datetime
 from typing import Any
 
@@ -17,7 +17,7 @@ import websockets
 
 from app.config import AppConfig
 from data.kline_buffer import BUFFER_SIZE, MIN_BARS_FOR_SIGNALS, KlineBufferStore
-from data.models import Candle, MarketTick, ProviderHealth
+from data.models import MarketTick, ProviderHealth
 from data.provider import RealTimeProvider
 from data.realtime import ConnectionMonitor, TickValidator
 
@@ -37,11 +37,14 @@ FALLBACK_USDT_PERPETUALS = (
 
 BOOK_TICKER_SUFFIX = "@bookTicker"
 SYMBOL_SILENCE_SECONDS = 20
-KLINE_SUBSCRIBE_BATCH = 20
+SYMBOL_STALE_SECONDS = 10
+BOOK_TICKER_SUBSCRIBE_BATCH = 20
+WS_PING_INTERVAL = 20
+WS_PING_TIMEOUT = 10
 
 
 class BinanceFuturesProvider(RealTimeProvider):
-    """USDT perpetual futures via bookTicker prices and kline WS indicator buffers."""
+    """USDT perpetual futures via bookTicker prices and tick-built indicator buffers."""
 
     name = "Binance USDⓈ-M Futures"
 
@@ -54,6 +57,7 @@ class BinanceFuturesProvider(RealTimeProvider):
             set(),
             config.stale_after_seconds,
             partial_coverage_allowed=True,
+            rotation_stale_after_seconds=SYMBOL_STALE_SECONDS,
         )
         self._validator = TickValidator(config.stale_after_seconds)
         self._previous_closes: dict[str, float] = {}
@@ -61,7 +65,11 @@ class BinanceFuturesProvider(RealTimeProvider):
         self._raw_frames_logged = 0
         self.first_frame_type: str | None = None
         self._last_tick_at: dict[str, datetime] = {}
-        self._kline_probe_complete = False
+        self._reconnect_requested = asyncio.Event()
+        self._on_stale_reset: Callable[[list[str]], None] | None = None
+
+    def set_stale_reset_handler(self, handler: Callable[[list[str]], None]) -> None:
+        self._on_stale_reset = handler
 
     @property
     def health(self) -> ProviderHealth:
@@ -90,9 +98,8 @@ class BinanceFuturesProvider(RealTimeProvider):
         stop = asyncio.Event()
         workers = [
             asyncio.create_task(self._run_bookticker_feed(queue, stop), name="bookticker-feed"),
-            asyncio.create_task(self._run_kline_feed("1m", stop), name="kline-1m-feed"),
-            asyncio.create_task(self._run_kline_feed("1h", stop), name="kline-1h-feed"),
             asyncio.create_task(self._prune_silent_symbols(stop), name="silent-symbol-pruner"),
+            asyncio.create_task(self._run_stale_watchdog(stop), name="stale-watchdog"),
         ]
         try:
             while not stop.is_set():
@@ -110,11 +117,12 @@ class BinanceFuturesProvider(RealTimeProvider):
         btc_probe = False
         awaiting_first_tick = True
         while not stop.is_set():
+            self._reconnect_requested.clear()
             try:
                 async with websockets.connect(
                     url,
-                    ping_interval=20,
-                    ping_timeout=20,
+                    ping_interval=WS_PING_INTERVAL,
+                    ping_timeout=WS_PING_TIMEOUT,
                     close_timeout=5,
                 ) as socket:
                     self._monitor.mark_connected()
@@ -123,6 +131,9 @@ class BinanceFuturesProvider(RealTimeProvider):
                     await socket.send(json.dumps(self._subscription_frame(active_symbols, BOOK_TICKER_SUFFIX, 1)))
                     logger.info("Binance bookTicker connected: streams=%s", len(active_symbols))
                     while not stop.is_set():
+                        if self._reconnect_requested.is_set():
+                            logger.warning("Binance bookTicker forced reconnect after stale data")
+                            break
                         recv_timeout = 30 if awaiting_first_tick else self.config.stale_after_seconds
                         raw_message = await asyncio.wait_for(socket.recv(), timeout=recv_timeout)
                         self._log_raw_frame(raw_message)
@@ -160,47 +171,38 @@ class BinanceFuturesProvider(RealTimeProvider):
                     btc_probe = True
                 failures += 1
                 awaiting_first_tick = True
+                self._validator.reset_all()
                 await asyncio.sleep(min(self.config.reconnect_backoff_seconds * 2 ** (failures - 1), 60))
 
-    async def _run_kline_feed(self, interval: str, stop: asyncio.Event) -> None:
-        """Dedicated connection per interval to avoid stream limits on one socket."""
-        url = f"{self.config.binance_websocket_url.rstrip('/')}/ws"
-        suffix = f"@kline_{interval}"
-        failures = 0
-        btc_probe = False
+    async def _run_stale_watchdog(self, stop: asyncio.Event) -> None:
+        """Reset stale symbol buffers and force reconnect when ticks stop flowing."""
         while not stop.is_set():
-            try:
-                async with websockets.connect(
-                    url,
-                    ping_interval=20,
-                    ping_timeout=20,
-                    close_timeout=5,
-                ) as socket:
-                    failures = 0
-                    active_symbols = ("BTCUSDT",) if btc_probe else self.symbols
-                    await self._subscribe_batches(socket, active_symbols, suffix, start_id=1)
-                    logger.info("Binance kline_%s connected: symbols=%s", interval, len(active_symbols))
-                    while not stop.is_set():
-                        raw_message = await asyncio.wait_for(socket.recv(), timeout=30)
-                        self._log_raw_frame(raw_message)
-                        parsed = self._parse_kline(raw_message, interval)
-                        if parsed:
-                            candle, is_closed = parsed
-                            if candle.symbol in self.symbols:
-                                self.klines.upsert_kline(candle, is_closed)
-                                if interval == "1m" and not self._kline_probe_complete:
-                                    self._kline_probe_complete = True
-                                    logger.info("Binance kline_%s frames flowing for %s", interval, candle.symbol)
-                                if btc_probe:
-                                    remaining = tuple(symbol for symbol in self.symbols if symbol != "BTCUSDT")
-                                    await self._subscribe_batches(socket, remaining, suffix, start_id=2)
-                                    btc_probe = False
-            except (OSError, websockets.WebSocketException, asyncio.TimeoutError):
-                failures += 1
-                if interval == "1m" and not btc_probe and not self._kline_probe_complete:
-                    logger.warning("Binance kline_%s batch silent; probing BTCUSDT", interval)
-                    btc_probe = True
-                await asyncio.sleep(min(self.config.reconnect_backoff_seconds * 2 ** (failures - 1), 60))
+            await asyncio.sleep(3)
+            now = datetime.now(UTC)
+            stale_symbols = [
+                symbol
+                for symbol, last_at in self._last_tick_at.items()
+                if (now - last_at).total_seconds() > SYMBOL_STALE_SECONDS
+            ]
+            global_stale = (
+                self._monitor.health.last_data_at is None
+                or (now - self._monitor.health.last_data_at).total_seconds() > SYMBOL_STALE_SECONDS
+            )
+            if not stale_symbols and not global_stale:
+                continue
+            if stale_symbols:
+                logger.warning(
+                    "Resetting indicator buffers for stale symbols (>=%ss): %s",
+                    SYMBOL_STALE_SECONDS,
+                    stale_symbols[:8] if len(stale_symbols) > 8 else stale_symbols,
+                )
+                self.klines.reset_symbols(stale_symbols)
+                for symbol in stale_symbols:
+                    self._validator.reset_symbol(symbol)
+                if self._on_stale_reset:
+                    self._on_stale_reset(stale_symbols)
+            if global_stale or len(stale_symbols) >= max(3, len(self.symbols) // 4):
+                self._reconnect_requested.set()
 
     async def _prune_silent_symbols(self, stop: asyncio.Event) -> None:
         while not stop.is_set():
@@ -238,8 +240,8 @@ class BinanceFuturesProvider(RealTimeProvider):
         start_id: int,
     ) -> None:
         request_id = start_id
-        for start in range(0, len(symbols), KLINE_SUBSCRIBE_BATCH):
-            batch = symbols[start:start + KLINE_SUBSCRIBE_BATCH]
+        for start in range(0, len(symbols), BOOK_TICKER_SUBSCRIBE_BATCH):
+            batch = symbols[start:start + BOOK_TICKER_SUBSCRIBE_BATCH]
             await socket.send(json.dumps(self._subscription_frame(batch, suffix, request_id)))
             request_id += 1
 
@@ -310,35 +312,5 @@ class BinanceFuturesProvider(RealTimeProvider):
         except (TypeError, ValueError, OSError):
             return None
 
-    @staticmethod
-    def _parse_kline(raw_message: str | bytes | dict[str, Any], interval: str) -> tuple[Candle, bool] | None:
-        if isinstance(raw_message, (str, bytes)):
-            try:
-                payload = json.loads(raw_message)
-            except (TypeError, json.JSONDecodeError):
-                return None
-        else:
-            payload = raw_message
-        data = payload.get("data", payload)
-        if not isinstance(data, dict) or data.get("e") != "kline":
-            return None
-        kline = data.get("k")
-        if not isinstance(kline, dict) or kline.get("i") != interval:
-            return None
-        try:
-            candle = Candle(
-                symbol=str(data["s"]),
-                timeframe=interval,
-                timestamp=datetime.fromtimestamp(float(kline["t"]) / 1000, UTC),
-                open=float(kline["o"]),
-                high=float(kline["h"]),
-                low=float(kline["l"]),
-                close=float(kline["c"]),
-                volume=float(kline["v"]),
-            )
-            return candle, bool(kline.get("x"))
-        except (KeyError, TypeError, ValueError):
-            return None
-
-    def historical_candles(self, symbol: str, timeframe: str) -> list[Candle]:
+    def historical_candles(self, symbol: str, timeframe: str) -> list:
         return self.klines.candles(symbol, timeframe)

@@ -50,8 +50,24 @@ def test_tick_fallback_builds_one_minute_series() -> None:
     assert store.structure("ETHUSDT").atr_14 is not None
 
 
-def test_kline_frame_counter_increments() -> None:
-    store = KlineBufferStore()
-    store.upsert_kline(_candle("SOLUSDT", 0, 10), is_closed=False)
-    store.upsert_kline(_candle("SOLUSDT", 0, 10.5), is_closed=True)
-    assert store.kline_frames_received == 2
+def test_synthetic_trends_track_period_opens_from_ticks() -> None:
+    store = KlineBufferStore(maxlen=BUFFER_SIZE)
+    open_time = datetime(2026, 1, 1, 10, 0, tzinfo=UTC)
+    store.upsert_from_tick(MarketTick("BTCUSDT", 100.0, open_time, source="test"))
+    trends = store.synthetic_trends("BTCUSDT", 105.0)
+    assert trends.trend_15m == "UP"
+    assert trends.trend_1h == "UP"
+    assert trends.trend_4h == "UP"
+    assert trends.trend_daily == "UP"
+    trends_down = store.synthetic_trends("BTCUSDT", 95.0)
+    assert trends_down.trend_15m == "DOWN"
+
+
+def test_reset_symbol_clears_buffers_and_trends() -> None:
+    store = KlineBufferStore(maxlen=BUFFER_SIZE)
+    now = datetime(2026, 1, 1, 0, 0, tzinfo=UTC)
+    store.upsert_from_tick(MarketTick("SOLUSDT", 10.0, now, source="test"))
+    assert "SOLUSDT" in store.symbols_with_min_bars()
+    store.reset_symbol("SOLUSDT")
+    assert "SOLUSDT" not in store.symbols_with_min_bars()
+    assert store.synthetic_trends("SOLUSDT", 10.0).trend_15m == "FLAT"

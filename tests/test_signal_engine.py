@@ -1,6 +1,7 @@
 from datetime import UTC, datetime
 
 from data.historical import synthetic_candles
+from data.kline_buffer import SyntheticTrends
 from data.models import MarketTick, SignalState
 from strategy.scoring import classify, meaningful_transition
 from strategy.signal_engine import SignalEngine
@@ -33,3 +34,23 @@ def test_notification_rules_require_meaningful_state_change() -> None:
     assert meaningful_transition(SignalState.WAIT, SignalState.BUY)
     assert meaningful_transition(SignalState.BUY, SignalState.STRONG_BUY)
     assert not meaningful_transition(SignalState.BUY, SignalState.BUY)
+
+
+def test_freshness_gates_force_bekle_when_data_is_stale() -> None:
+    engine = SignalEngine(make_config(), "test")
+    state = engine._apply_freshness_gates(
+        SignalState.STRONG_BUY,
+        rsi=70.0,
+        trends=SyntheticTrends("UP", "UP", "UP", "UP"),
+        symbol_data_age=6.0,
+    )
+    assert state is SignalState.WAIT
+
+
+def test_strong_long_requires_rsi_trends_and_fresh_data() -> None:
+    engine = SignalEngine(make_config(), "test")
+    up = SyntheticTrends("UP", "UP", "UP", "UP")
+    assert engine._apply_freshness_gates(SignalState.STRONG_BUY, 70.0, up, 1.0) is SignalState.STRONG_BUY
+    assert engine._apply_freshness_gates(SignalState.STRONG_BUY, 100.0, up, 1.0) is SignalState.BUY
+    assert engine._apply_freshness_gates(SignalState.STRONG_BUY, 70.0, SyntheticTrends("DOWN", "UP", "UP", "UP"), 1.0) is SignalState.BUY
+    assert engine._apply_freshness_gates(SignalState.STRONG_BUY, 70.0, up, 4.0) is SignalState.BUY

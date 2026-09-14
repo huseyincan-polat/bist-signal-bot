@@ -6,7 +6,7 @@ from collections import defaultdict, deque
 from datetime import UTC, datetime, timedelta
 
 from app.config import AppConfig
-from data.kline_buffer import KlineBufferStore, MIN_BARS_FOR_SIGNALS
+from data.kline_buffer import KlineBufferStore, MIN_BARS_FOR_SIGNALS, SyntheticTrends
 from data.models import Candle, MarketTick, Signal, SignalState
 from indicators import momentum, patterns, price_action, trend, volatility, volume
 from risk.scalping import scalping_risk_plan
@@ -34,6 +34,12 @@ class SignalEngine:
 
     def bind_kline_store(self, store: KlineBufferStore) -> None:
         self._kline_store = store
+
+    def reset_symbol(self, symbol: str) -> None:
+        self.signals.pop(symbol, None)
+        self._pending_previous.pop(symbol, None)
+        self._tick_prices.pop(symbol, None)
+        self._candles.pop(symbol, None)
 
     def seed_history(self, symbol: str, timeframe: str, candles: list[Candle]) -> None:
         history = list(candles)[-600:]
@@ -126,7 +132,7 @@ class SignalEngine:
         prices.append(tick.price)
         return tick_momentum_pct(list(prices))
 
-    def on_tick(self, tick: MarketTick) -> Signal | None:
+    def on_tick(self, tick: MarketTick, symbol_data_age: float | None = None) -> Signal | None:
         """Incrementally update only the affected symbol then recalculate it."""
         if tick.previous_close is not None and tick.previous_close > 0:
             self._previous_closes[tick.symbol] = tick.previous_close
@@ -141,12 +147,23 @@ class SignalEngine:
         if len(analysis_candles) < MIN_BARS_FOR_SIGNALS:
             return None
         previous = self.signals.get(tick.symbol)
-        signal = self._build_signal(tick, analysis_candles)
+        trends = (
+            self._kline_store.synthetic_trends(tick.symbol, tick.price)
+            if self._kline_store
+            else SyntheticTrends()
+        )
+        signal = self._build_signal(tick, analysis_candles, symbol_data_age, trends)
         self._pending_previous[tick.symbol] = previous.state if previous else None
         self.signals[tick.symbol] = signal
         return signal
 
-    def _build_signal(self, tick: MarketTick, candles: list[Candle]) -> Signal:
+    def _build_signal(
+        self,
+        tick: MarketTick,
+        candles: list[Candle],
+        symbol_data_age: float | None = None,
+        trends: SyntheticTrends | None = None,
+    ) -> Signal:
         tick_accel = self._record_tick_price(tick)
         trend_values = trend.calculate(candles)
         momentum_values = momentum.calculate(candles)
@@ -172,6 +189,12 @@ class SignalEngine:
             (volatility_values["bb_width"] or 0) > 0.12,
         )
         state = classify(score, self.config.scoring.get("buckets"))
+        state = self._apply_freshness_gates(
+            state,
+            momentum_values["rsi_14"],
+            trends or SyntheticTrends(),
+            symbol_data_age,
+        )
         risk_plan = None
         if state is not SignalState.WAIT:
             bullish = is_bullish(state)
@@ -189,6 +212,11 @@ class SignalEngine:
             "market_regime": self.market_regime,
             "data_quality": "LIVE" if tick.source == self.provider_name else "DELAYED_HISTORICAL",
             "reward_to_risk": risk_plan.reward_to_risk if risk_plan else None,
+            "trend_15m": trends.trend_15m if trends else None,
+            "trend_1h": trends.trend_1h if trends else None,
+            "trend_4h": trends.trend_4h if trends else None,
+            "trend_daily": trends.trend_daily if trends else None,
+            "symbol_data_age": symbol_data_age,
         }
         return Signal(
             symbol=tick.symbol,
@@ -204,6 +232,31 @@ class SignalEngine:
             provider=self.provider_name,
             metrics=metrics,
         )
+
+    @staticmethod
+    def _apply_freshness_gates(
+        state: SignalState,
+        rsi: float | None,
+        trends: SyntheticTrends,
+        symbol_data_age: float | None,
+    ) -> SignalState:
+        if symbol_data_age is not None and symbol_data_age > 5:
+            return SignalState.WAIT
+        if state is SignalState.STRONG_BUY:
+            if symbol_data_age is None or symbol_data_age >= 3:
+                return SignalState.BUY
+            if rsi is None or rsi <= 50 or rsi >= 95:
+                return SignalState.BUY
+            if not trends.all_up("15m", "1h", "daily"):
+                return SignalState.BUY
+        if state is SignalState.STRONG_SELL:
+            if symbol_data_age is None or symbol_data_age >= 3:
+                return SignalState.SELL
+            if rsi is None or rsi <= 5 or rsi >= 50:
+                return SignalState.SELL
+            if not trends.all_down("15m", "1h", "daily"):
+                return SignalState.SELL
+        return state
 
     @staticmethod
     def _reasons(

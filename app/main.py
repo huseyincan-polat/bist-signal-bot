@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from contextlib import asynccontextmanager, suppress
+from datetime import UTC, datetime
 
 import uvicorn
 
@@ -72,6 +73,9 @@ class SignalBotApplication:
             bind_store = getattr(self.provider, "klines", None)
             if bind_store is not None:
                 self.engine.bind_kline_store(bind_store)
+            stale_handler = getattr(self.provider, "set_stale_reset_handler", None)
+            if stale_handler is not None:
+                stale_handler(self.engine.reset_symbol)
             async for tick in self.provider.stream():
                 health = self.provider.health
                 self.dashboard.record_tick(tick)
@@ -94,7 +98,13 @@ class SignalBotApplication:
                     if tick.symbol in self.config.symbols:
                         await self.dashboard.publish(tick.symbol)
                     continue
-                signal = self.engine.on_tick(tick)
+                live_at = health.last_data_by_symbol.get(tick.symbol)
+                symbol_age = (
+                    round((datetime.now(UTC) - live_at).total_seconds(), 2)
+                    if live_at
+                    else None
+                )
+                signal = self.engine.on_tick(tick, symbol_data_age=symbol_age)
                 if signal:
                     await self.dashboard.publish(signal.symbol)
                     if not health.symbol_is_stale(signal.symbol) and self.engine.should_notify(signal):

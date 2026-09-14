@@ -14,6 +14,12 @@ class TickValidator:
         self.stale_after_seconds = stale_after_seconds
         self._last_tick: dict[str, MarketTick] = {}
 
+    def reset_symbol(self, symbol: str) -> None:
+        self._last_tick.pop(symbol, None)
+
+    def reset_all(self) -> None:
+        self._last_tick.clear()
+
     def validate(
         self,
         tick: MarketTick,
