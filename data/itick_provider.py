@@ -13,7 +13,7 @@ import inspect
 import json
 import logging
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 from datetime import UTC, datetime
 from typing import Any
 
@@ -28,9 +28,10 @@ logger = logging.getLogger(__name__)
 
 
 class ITickRealTimeProvider(RealTimeProvider):
-    """Streams the configured BIST 30 watchlist from iTick's stock channel."""
+    """Streams the configured iTick Turkish-stock watchlist."""
 
     name = "iTick stock WebSocket"
+    THYAO_FORMAT_CANDIDATES = ("THYAO$TR", "THYAO", "THYAO.IS", "THYAO.E")
 
     def __init__(self, config: AppConfig) -> None:
         self.config = config
@@ -40,6 +41,7 @@ class ITickRealTimeProvider(RealTimeProvider):
         self._depth: dict[str, dict[str, float]] = {}
         self._last_message_at: datetime | None = None
         self._first_live_tick_logged = False
+        self.accepted_ticker_format: str | None = None
 
     @property
     def health(self) -> ProviderHealth:
@@ -62,13 +64,22 @@ class ITickRealTimeProvider(RealTimeProvider):
 
     async def connect(self) -> None:
         if not self.config.is_itick_configured:
-            self._monitor.mark_error("iTick API key or BIST 30 subscription list is not configured")
-            raise RuntimeError("ITICK_API_KEY and iTick BIST 30 symbols are required")
+            self._monitor.mark_error("iTick API key or active subscription list is not configured")
+            raise RuntimeError("ITICK_API_KEY and iTick symbols are required")
 
-    def subscription_payload(self) -> dict[str, str]:
+    def subscription_candidates(self) -> tuple[str, ...]:
+        """Try documented `$TR` first, then user-requested THYAO compatibility forms."""
+        if self.symbols == ("THYAO",):
+            return self.THYAO_FORMAT_CANDIDATES
+        return (",".join(f"{symbol}${self.config.itick_region}" for symbol in self.symbols),)
+
+    def subscription_payload(self, codes: str | None = None) -> dict[str, str]:
         """Published iTick payload: comma-separated SYMBOL$TR and quote/tick/depth."""
-        codes = ",".join(f"{symbol}${self.config.itick_region}" for symbol in self.symbols)
-        return {"ac": "subscribe", "params": codes, "types": "quote,tick,depth"}
+        return {
+            "ac": "subscribe",
+            "params": codes or self.subscription_candidates()[0],
+            "types": "quote,tick,depth",
+        }
 
     async def stream(self) -> AsyncIterator[MarketTick]:
         await self.connect()
@@ -80,6 +91,8 @@ class ITickRealTimeProvider(RealTimeProvider):
                     self._monitor.mark_connected()
                     logger.info("iTick WebSocket connected; waiting for authentication")
                     heartbeat = asyncio.create_task(self._heartbeat(socket), name="itick-heartbeat")
+                    candidates = iter(self.subscription_candidates())
+                    pending_format: str | None = None
                     async for raw_message in socket:
                         self._last_message_at = datetime.now(UTC)
                         message = self._decode(raw_message)
@@ -88,21 +101,32 @@ class ITickRealTimeProvider(RealTimeProvider):
                         if self._authentication_failed(message):
                             raise PermissionError("iTick authentication failed")
                         if self._authentication_succeeded(message):
-                            await socket.send(json.dumps(self.subscription_payload()))
-                            logger.info("iTick authenticated; BIST 30 subscription requested")
+                            pending_format = await self._subscribe_next(socket, candidates)
                             continue
                         if self._subscription_failed(message):
                             logger.warning(
-                                "iTick BIST 30 subscription rejected (code=%s)",
+                                "iTick subscription rejected: format=%s code=%s",
+                                pending_format,
                                 message.get("code"),
                             )
-                            raise PermissionError("iTick BIST 30 subscription was rejected")
+                            pending_format = await self._subscribe_next(socket, candidates)
+                            continue
+                        if self._subscription_succeeded(message):
+                            self.accepted_ticker_format = pending_format
+                            logger.info("iTick subscription accepted: format=%s", pending_format)
+                            pending_format = None
+                            continue
                         tick = self.parse_message(message)
                         if tick and self._validator.validate(tick).accepted:
                             self._monitor.record_tick(tick, real_time=True)
                             consecutive_failures = 0
                             if not self._first_live_tick_logged:
-                                logger.info("iTick live tick received for %s", tick.symbol)
+                                logger.info(
+                                    "iTick live tick received: symbol=%s price=%s timestamp=%s",
+                                    tick.symbol,
+                                    tick.price,
+                                    tick.timestamp.isoformat(),
+                                )
                                 self._first_live_tick_logged = True
                             yield tick
                 raise ConnectionError("iTick stream closed")
@@ -123,6 +147,15 @@ class ITickRealTimeProvider(RealTimeProvider):
                     heartbeat.cancel()
                     with suppress(asyncio.CancelledError):
                         await heartbeat
+
+    async def _subscribe_next(self, socket: Any, candidates: Iterator[str]) -> str:
+        try:
+            ticker_format = next(candidates)
+        except StopIteration as error:
+            raise PermissionError("iTick rejected every THYAO ticker format") from error
+        await socket.send(json.dumps(self.subscription_payload(ticker_format)))
+        logger.info("iTick subscription requested: format=%s", ticker_format)
+        return ticker_format
 
     def _socket(self) -> Any:
         """Use the documented `token` WebSocket header without exposing it in logs."""
@@ -164,6 +197,10 @@ class ITickRealTimeProvider(RealTimeProvider):
     @staticmethod
     def _subscription_failed(message: dict[str, Any]) -> bool:
         return message.get("resAc") == "subscribe" and message.get("code") != 1
+
+    @staticmethod
+    def _subscription_succeeded(message: dict[str, Any]) -> bool:
+        return message.get("resAc") == "subscribe" and message.get("code") == 1
 
     def parse_message(self, message: dict[str, Any]) -> MarketTick | None:
         """Map documented quote/tick/depth JSON (`data.s`, `ld`, `t`, `v`) to MarketTick."""
