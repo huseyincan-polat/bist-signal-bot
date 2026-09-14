@@ -309,6 +309,7 @@ class ITickRealTimeProvider(RealTimeProvider):
             ask=depth.get("ask"),
             tick_volume=float(data["v"]) if is_trade and isinstance(data.get("v"), (int, float)) else None,
             total_volume=float(data["v"]) if not is_trade and isinstance(data.get("v"), (int, float)) else None,
+            previous_close=float(data["p"]) if isinstance(data.get("p"), (int, float)) else None,
             bid_depth=depth.get("bid_depth"),
             ask_depth=depth.get("ask_depth"),
             source=self.name,

@@ -21,6 +21,7 @@ class SignalEngine:
         self.config = config
         self.provider_name = provider_name
         self._candles: dict[str, dict[str, list[Candle]]] = defaultdict(dict)
+        self._previous_closes: dict[str, float] = {}
         self.signals: dict[str, Signal] = {}
         self._last_alert_at: dict[str, datetime] = {}
         self._pending_previous: dict[str, SignalState | None] = {}
@@ -28,7 +29,13 @@ class SignalEngine:
         self.market_regime = "NEUTRAL"
 
     def seed_history(self, symbol: str, timeframe: str, candles: list[Candle]) -> None:
-        self._candles[symbol][timeframe] = list(candles)[-600:]
+        history = list(candles)[-600:]
+        self._candles[symbol][timeframe] = history
+        if timeframe == "daily" and len(history) >= 2:
+            self._previous_closes[symbol] = history[-2].close
+
+    def previous_close(self, symbol: str) -> float | None:
+        return self._previous_closes.get(symbol)
 
     def _update_current_candle(self, tick: MarketTick) -> None:
         history = self._candles[tick.symbol].setdefault("1m", [])
@@ -129,6 +136,8 @@ class SignalEngine:
 
     def on_tick(self, tick: MarketTick) -> Signal | None:
         """Incrementally update only the affected symbol then recalculate it."""
+        if tick.previous_close is not None and tick.previous_close > 0:
+            self._previous_closes[tick.symbol] = tick.previous_close
         self._update_current_candle(tick)
         self._update_daily_candle(tick)
         if tick.symbol == self.index_symbol:

@@ -108,7 +108,7 @@ def test_itick_parse_maps_published_depth_and_tick_fields() -> None:
         }
     ) is None
     tick = provider.parse_message(
-        {"code": 1, "data": {"s": "THYAO", "r": "TR", "ld": 250.15, "v": 42, "t": 1_731_689_407_000, "type": "tick"}}
+        {"code": 1, "data": {"s": "THYAO", "r": "TR", "ld": 250.15, "p": 248, "v": 42, "t": 1_731_689_407_000, "type": "tick"}}
     )
     assert tick is not None
     assert tick.symbol == "THYAO"
@@ -116,6 +116,7 @@ def test_itick_parse_maps_published_depth_and_tick_fields() -> None:
     assert tick.bid == 250.1 and tick.ask == 250.2
     assert tick.bid_depth == 100 and tick.ask_depth == 200
     assert tick.tick_volume == 42 and tick.total_volume is None
+    assert tick.previous_close == 248
 
 
 def test_itick_health_check_requires_fresh_live_tick() -> None:

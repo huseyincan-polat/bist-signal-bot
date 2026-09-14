@@ -36,6 +36,7 @@ class MarketTick:
     ask: float | None = None
     tick_volume: float | None = None
     total_volume: float | None = None
+    previous_close: float | None = None
     bid_depth: float | None = None
     ask_depth: float | None = None
     source: str = ""

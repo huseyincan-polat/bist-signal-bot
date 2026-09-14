@@ -58,6 +58,7 @@ class DashboardState:
         signal = self.engine.signals.get(symbol)
         live_at = self.health.last_data_by_symbol.get(symbol)
         live_age = round((datetime.now(UTC) - live_at).total_seconds(), 1) if live_at else None
+        price, previous_close, price_change, price_change_pct = self._price_change(symbol, signal)
         if live_at is None:
             row_data_state = "PRIMED" if signal else "WAITING_LIVE"
         elif self.health.symbol_is_stale(symbol):
@@ -65,11 +66,14 @@ class DashboardState:
         else:
             row_data_state = "REAL_TIME"
         if not signal:
-            tick = self.last_ticks.get(symbol)
             return {
                 "symbol": symbol, "name": self.config.symbol_names.get(symbol, symbol),
-                "price": tick.price if tick else None, "change": None,
-                "signal": "DOĞRULANMADI" if tick else "YÜKLENİYOR",
+                "price": price,
+                "prev_close": previous_close,
+                "price_change": price_change,
+                "price_change_pct": price_change_pct,
+                "change": price_change_pct,
+                "signal": "DOĞRULANMADI" if price is not None else "YÜKLENİYOR",
                 "score": None, "rsi": None, "macd": None, "adx": None, "relative_volume": None,
                 "trend": "—", "15m": "—", "1h": "—", "daily": "—", "stop": None,
                 "target": None,
@@ -80,8 +84,11 @@ class DashboardState:
         return {
             "symbol": symbol,
             "name": self.config.symbol_names.get(symbol, symbol),
-            "price": signal.price,
-            "change": metric.get("relative_strength"),
+            "price": price,
+            "prev_close": previous_close,
+            "price_change": price_change,
+            "price_change_pct": price_change_pct,
+            "change": price_change_pct,
             "signal": signal.state.value, "score": signal.confidence, "rsi": metric.get("rsi"),
             "macd": metric.get("macd"), "adx": metric.get("adx"),
             "relative_volume": metric.get("relative_volume"), "trend": metric.get("trend"),
@@ -92,6 +99,23 @@ class DashboardState:
             "row_data_state": row_data_state,
             "data_quality": metric.get("data_quality"),
         }
+
+    def _price_change(
+        self,
+        symbol: str,
+        signal: Signal | None,
+    ) -> tuple[float | None, float | None, float | None, float | None]:
+        tick = self.last_ticks.get(symbol)
+        price = tick.price if tick else signal.price if signal else None
+        previous_close = (
+            tick.previous_close
+            if tick and tick.previous_close is not None
+            else self.engine.previous_close(symbol)
+        )
+        if price is None or previous_close is None or previous_close == 0:
+            return price, previous_close, None, None
+        change = price - previous_close
+        return price, previous_close, round(change, 2), round(change / previous_close * 100, 2)
 
     async def publish(self, symbol: str) -> None:
         if not self.connections:
@@ -157,7 +181,7 @@ DASHBOARD_HTML = r"""<!doctype html>
 <title>BIST 100 Sinyal Merkezi</title>
 <style>
 :root{--bg:#07111f;--panel:#0d1b2d;--soft:#14253b;--line:#203952;--ink:#e7f0fb;--muted:#93a9c3;--blue:#4bb3fd;--green:#2dd4a3;--red:#fb7185;--amber:#fbbf24}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:14px Inter,ui-sans-serif,system-ui,sans-serif}main{max-width:1680px;margin:auto;padding:24px}.top{display:flex;gap:16px;justify-content:space-between;align-items:flex-start}.eyebrow{color:var(--blue);font-weight:700;letter-spacing:.08em;font-size:11px}.top h1{font-size:28px;margin:5px 0}.sub{color:var(--muted);margin:0}.status{background:var(--panel);padding:12px 16px;border:1px solid var(--line);border-radius:10px;text-align:right}.pill{display:inline-block;border-radius:999px;padding:4px 9px;font-size:12px;font-weight:700;background:#14324d;color:#a7d8ff}.warning{margin:22px 0;padding:14px 16px;border-radius:9px;background:#4b1f2a;border:1px solid #fb7185;color:#ffe1e7;font-weight:800;letter-spacing:.02em}.hide{display:none}.summary{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:16px 0}.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px}.card label{color:var(--muted);font-size:12px}.card strong{display:block;font-size:20px;margin-top:8px}.panels{display:grid;grid-template-columns:1fr 1fr;gap:16px}.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px}.panel h2{font-size:14px;margin:0 0 12px}.leaders{display:flex;gap:10px;flex-wrap:wrap}.leader{padding:8px 10px;background:var(--soft);border-radius:7px;font-weight:700}.toolbar{display:flex;gap:9px;align-items:center;margin:24px 0 12px;flex-wrap:wrap}.toolbar button,.toolbar input{border:1px solid var(--line);background:var(--panel);color:var(--ink);padding:8px 11px;border-radius:7px}.toolbar input{min-width:230px}.toolbar button{cursor:pointer}.toolbar button.active{background:var(--blue);color:#06101d;border-color:var(--blue);font-weight:800}.table-wrap{overflow:auto;border:1px solid var(--line);border-radius:10px}table{border-collapse:collapse;min-width:1260px;width:100%;background:var(--panel)}th{text-align:left;color:var(--muted);font-size:11px;letter-spacing:.04em;padding:12px;border-bottom:1px solid var(--line);white-space:nowrap}td{padding:12px;border-bottom:1px solid #172c42;white-space:nowrap}tr:last-child td{border:0}.signal{font-weight:800}.buy{color:var(--green)}.sell{color:var(--red)}.wait{color:var(--amber)}.muted{color:var(--muted)}.empty{padding:26px;color:var(--muted);text-align:center}@media(max-width:760px){main{padding:15px}.top{display:block}.status{text-align:left;margin-top:12px}.summary{grid-template-columns:1fr 1fr}.panels{grid-template-columns:1fr}.top h1{font-size:23px}.toolbar input{width:100%;min-width:0}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:14px Inter,ui-sans-serif,system-ui,sans-serif}main{max-width:1680px;margin:auto;padding:24px}.top{display:flex;gap:16px;justify-content:space-between;align-items:flex-start}.eyebrow{color:var(--blue);font-weight:700;letter-spacing:.08em;font-size:11px}.top h1{font-size:28px;margin:5px 0}.sub{color:var(--muted);margin:0}.status{background:var(--panel);padding:12px 16px;border:1px solid var(--line);border-radius:10px;text-align:right}.pill{display:inline-block;border-radius:999px;padding:4px 9px;font-size:12px;font-weight:700;background:#14324d;color:#a7d8ff}.warning{margin:22px 0;padding:14px 16px;border-radius:9px;background:#4b1f2a;border:1px solid #fb7185;color:#ffe1e7;font-weight:800;letter-spacing:.02em}.hide{display:none}.summary{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:16px 0}.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px}.card label{color:var(--muted);font-size:12px}.card strong{display:block;font-size:20px;margin-top:8px}.panels{display:grid;grid-template-columns:1fr 1fr;gap:16px}.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px}.panel h2{font-size:14px;margin:0 0 12px}.leaders{display:flex;gap:10px;flex-wrap:wrap}.leader{padding:8px 10px;background:var(--soft);border-radius:7px;font-weight:700}.toolbar{display:flex;gap:9px;align-items:center;margin:24px 0 12px;flex-wrap:wrap}.toolbar button,.toolbar input{border:1px solid var(--line);background:var(--panel);color:var(--ink);padding:8px 11px;border-radius:7px}.toolbar input{min-width:230px}.toolbar button{cursor:pointer}.toolbar button.active{background:var(--blue);color:#06101d;border-color:var(--blue);font-weight:800}.table-wrap{overflow:auto;border:1px solid var(--line);border-radius:10px}table{border-collapse:collapse;min-width:1260px;width:100%;background:var(--panel)}th{text-align:left;color:var(--muted);font-size:11px;letter-spacing:.04em;padding:12px;border-bottom:1px solid var(--line);white-space:nowrap}td{padding:12px;border-bottom:1px solid #172c42;white-space:nowrap}tr:last-child td{border:0}.signal{font-weight:800}.buy,.up{color:var(--green)}.sell,.down{color:var(--red)}.wait{color:var(--amber)}.flat{color:var(--muted)}.muted{color:var(--muted)}.empty{padding:26px;color:var(--muted);text-align:center}@media(max-width:760px){main{padding:15px}.top{display:block}.status{text-align:left;margin-top:12px}.summary{grid-template-columns:1fr 1fr}.panels{grid-template-columns:1fr}.top h1{font-size:23px}.toolbar input{width:100%;min-width:0}}
 </style></head><body><main>
 <header class="top"><div><div class="eyebrow">BIST 100 • TEKNİK ANALİZ</div><h1>Sinyal Merkezi</h1><p class="sub">Anlık veri doğrulanmadan bildirim gönderilmez. Emir iletimi yoktur.</p></div><div class="status"><span id="connection" class="pill">BAĞLANIYOR</span><div class="muted" id="provider">Sağlayıcı yükleniyor</div></div></header>
 <div id="warning" class="warning">⚠️ REAL-TIME DATA NOT AVAILABLE — Sinyaller ve Telegram bildirimleri devre dışı.</div>
@@ -166,8 +190,8 @@ DASHBOARD_HTML = r"""<!doctype html>
 <div class="toolbar" id="filters"><input id="search" type="search" placeholder="Hisse veya ad ara (ör. ALTINS1, altın)" aria-label="Hisse veya ad ara"><span class="muted">Filtre:</span><button class="active" data-filter="ALL">Tümü</button><button data-filter="GÜÇLÜ AL">GÜÇLÜ AL</button><button data-filter="AL">AL</button><button data-filter="BEKLE">BEKLE</button><button data-filter="SAT">SAT</button><button data-filter="GÜÇLÜ SAT">GÜÇLÜ SAT</button></div>
 <div class="table-wrap"><table><thead><tr><th>Hisse</th><th>Fiyat</th><th>Değişim %</th><th>Sinyal</th><th>Score</th><th>RSI</th><th>MACD</th><th>ADX</th><th>Bağıl Hacim</th><th>Trend</th><th>15m</th><th>1h</th><th>Günlük</th><th>Stop</th><th>Hedef 1</th><th>Veri Yaşı</th></tr></thead><tbody id="rows"><tr><td colspan="16" class="empty">BIST 100 sembolleri yükleniyor…</td></tr></tbody></table></div>
 </main><script>
-let rows=[],filter='ALL',query='',currentStatus={};const f=n=>n==null?'—':Number(n).toLocaleString('tr-TR',{maximumFractionDigits:2});const esc=s=>String(s??'—').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));const ageCell=r=>r.row_data_state==='REAL_TIME'?`${f(r.data_age)} sn · CANLI`:r.row_data_state==='STALE_DATA'?`${f(r.data_age)} sn · BAYAT`:r.row_data_state==='PRIMED'?'GEÇMİŞ VERİ · SIRADA':'SIRADA';
+let rows=[],filter='ALL',query='',currentStatus={};const f=n=>n==null?'—':Number(n).toLocaleString('tr-TR',{maximumFractionDigits:2});const esc=s=>String(s??'—').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));const ageCell=r=>r.row_data_state==='REAL_TIME'?`${f(r.data_age)} sn · CANLI`:r.row_data_state==='STALE_DATA'?`${f(r.data_age)} sn · BAYAT`:r.row_data_state==='PRIMED'?'GEÇMİŞ VERİ · SIRADA':'SIRADA';const priceCell=r=>{if(r.price==null)return'—';let c=Number(r.price_change||0),p=Number(r.price_change_pct||0),cls=c>0?'up':c<0?'down':'flat',arrow=c>0?'▲':c<0?'▼':'●',sign=c>0?'+':'';return `<b class="${cls}">${f(r.price)} ₺</b>${r.prev_close==null?'':`<br><small class="${cls}">${arrow} ${sign}${f(c)} ₺ (${sign}%${f(p)})</small>`}`};
 function cls(signal){return signal.includes('AL')?'buy':signal.includes('SAT')?'sell':'wait'}function leader(row){return `<span class="leader ${cls(row.signal)}">${esc(row.symbol)} · ${esc(row.signal)} ${f(row.score)}</span>`}
-function render(status){currentStatus=status;rows=status.rows||rows;document.querySelector('#provider').textContent=status.provider;document.querySelector('#connection').textContent=status.connected?'BAĞLI':'BAĞLANTI YOK';document.querySelector('#regime').textContent=status.market_regime;document.querySelector('#coverage').textContent=`${status.symbols_received}/${status.symbols_expected}`;document.querySelector('#age').textContent=status.data_age==null?'—':`${status.data_age} sn`;document.querySelector('#engine').textContent=status.ready_for_signals?'AKTİF':'EMNİYET KİLİDİ';document.querySelector('#warning').classList.toggle('hide',status.data_state==='REAL_TIME');document.querySelector('#buys').innerHTML=status.top_buys.length?status.top_buys.map(leader).join(''):'<span class="muted">Uygun AL sinyali yok.</span>';document.querySelector('#sells').innerHTML=status.top_sells.length?status.top_sells.map(leader).join(''):'<span class="muted">Uygun SAT sinyali yok.</span>';let visible=(filter==='ALL'?rows:rows.filter(r=>r.signal===filter)).filter(r=>`${r.symbol} ${r.name}`.toLocaleLowerCase('tr-TR').includes(query));document.querySelector('#rows').innerHTML=visible.length?visible.map(r=>`<tr><td><b>${esc(r.symbol)}</b><br><small class="muted">${esc(r.name)}</small></td><td>${f(r.price)}</td><td>${f(r.change)}</td><td class="signal ${cls(r.signal)}">${esc(r.signal)}</td><td>${f(r.score)}</td><td>${f(r.rsi)}</td><td>${f(r.macd)}</td><td>${f(r.adx)}</td><td>${f(r.relative_volume)}x</td><td>${esc(r.trend)}</td><td>${esc(r['15m'])}</td><td>${esc(r['1h'])}</td><td>${esc(r.daily)}</td><td>${f(r.stop)}</td><td>${f(r.target)}</td><td>${ageCell(r)}</td></tr>`).join(''):'<tr><td colspan="16" class="empty">Bu arama veya filtre için hisse yok.</td></tr>'}
+function render(status){currentStatus=status;rows=status.rows||rows;document.querySelector('#provider').textContent=status.provider;document.querySelector('#connection').textContent=status.connected?'BAĞLI':'BAĞLANTI YOK';document.querySelector('#regime').textContent=status.market_regime;document.querySelector('#coverage').textContent=`${status.symbols_received}/${status.symbols_expected}`;document.querySelector('#age').textContent=status.data_age==null?'—':`${status.data_age} sn`;document.querySelector('#engine').textContent=status.ready_for_signals?'AKTİF':'EMNİYET KİLİDİ';document.querySelector('#warning').classList.toggle('hide',status.data_state==='REAL_TIME');document.querySelector('#buys').innerHTML=status.top_buys.length?status.top_buys.map(leader).join(''):'<span class="muted">Uygun AL sinyali yok.</span>';document.querySelector('#sells').innerHTML=status.top_sells.length?status.top_sells.map(leader).join(''):'<span class="muted">Uygun SAT sinyali yok.</span>';let visible=(filter==='ALL'?rows:rows.filter(r=>r.signal===filter)).filter(r=>`${r.symbol} ${r.name}`.toLocaleLowerCase('tr-TR').includes(query));document.querySelector('#rows').innerHTML=visible.length?visible.map(r=>`<tr><td><b>${esc(r.symbol)}</b><br><small class="muted">${esc(r.name)}</small></td><td>${priceCell(r)}</td><td>${r.price_change_pct==null?'—':`${r.price_change_pct>0?'+':''}%${f(r.price_change_pct)}`}</td><td class="signal ${cls(r.signal)}">${esc(r.signal)}</td><td>${f(r.score)}</td><td>${f(r.rsi)}</td><td>${f(r.macd)}</td><td>${f(r.adx)}</td><td>${f(r.relative_volume)}x</td><td>${esc(r.trend)}</td><td>${esc(r['15m'])}</td><td>${esc(r['1h'])}</td><td>${esc(r.daily)}</td><td>${f(r.stop)}</td><td>${f(r.target)}</td><td>${ageCell(r)}</td></tr>`).join(''):'<tr><td colspan="16" class="empty">Bu arama veya filtre için hisse yok.</td></tr>'}
 document.querySelector('#filters').onclick=e=>{if(!e.target.dataset.filter)return;filter=e.target.dataset.filter;document.querySelectorAll('button').forEach(b=>b.classList.toggle('active',b.dataset.filter===filter));render(currentStatus)};document.querySelector('#search').oninput=e=>{query=e.target.value.toLocaleLowerCase('tr-TR').trim();render(currentStatus)};fetch('/api/state').then(r=>r.json()).then(render);let ws=new WebSocket(`${location.protocol==='https:'?'wss':'ws'}://${location.host}/ws`);ws.onmessage=e=>{let p=JSON.parse(e.data);if(p.status)render(p.status)};ws.onclose=()=>setTimeout(()=>location.reload(),3000);
 </script></body></html>"""
