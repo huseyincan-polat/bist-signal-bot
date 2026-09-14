@@ -34,6 +34,7 @@ class AppConfig:
     itick_region: str = "TR"
     itick_group_size: int = 3
     itick_group_listen_seconds: int = 3
+    itick_group_transition_seconds: int = 5
     scoring: dict[str, Any] = field(default_factory=dict)
     backtest: dict[str, Any] = field(default_factory=dict)
 
@@ -98,6 +99,7 @@ def load_config(path: str | Path = "config.yaml") -> AppConfig:
         itick_region=itick.get("region", "TR"),
         itick_group_size=int(itick.get("group_size", 3)),
         itick_group_listen_seconds=int(itick.get("group_listen_seconds", 3)),
+        itick_group_transition_seconds=int(itick.get("group_transition_seconds", 5)),
         scoring=raw.get("scoring", {}),
         backtest=raw.get("backtest", {}),
     )

@@ -42,9 +42,10 @@ class ITickRealTimeProvider(RealTimeProvider):
         self.symbols = tuple(config.itick_symbols)
         self.group_size = config.itick_group_size
         self.group_listen_seconds = config.itick_group_listen_seconds
+        self.group_transition_seconds = config.itick_group_transition_seconds
         rotation_seconds = (
             ((len(self.symbols) + self.group_size - 1) // self.group_size)
-            * self.group_listen_seconds
+            * (self.group_listen_seconds + self.group_transition_seconds)
             + 10
         )
         self._monitor = ConnectionMonitor(
@@ -134,7 +135,8 @@ class ITickRealTimeProvider(RealTimeProvider):
                         raise RotationBoundary
             except RotationBoundary:
                 # iTick's free endpoint closes after unsubscribe. Keep the last
-                # fresh state while immediately reconnecting to the next group.
+                # fresh state while rate-limiting the next connection.
+                await asyncio.sleep(self.group_transition_seconds)
                 continue
             except (OSError, websockets.WebSocketException, asyncio.TimeoutError, PermissionError, ConnectionError) as error:
                 self._monitor.mark_error("iTick stream unavailable")
