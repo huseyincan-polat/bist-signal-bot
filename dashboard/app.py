@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 from datetime import UTC, datetime
+from collections.abc import AsyncContextManager, Callable
 from typing import Any
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -88,9 +89,14 @@ class DashboardState:
             self.connections.discard(connection)
 
 
-def create_dashboard(config: AppConfig, engine: SignalEngine, health: ProviderHealth) -> tuple[FastAPI, DashboardState]:
+def create_dashboard(
+    config: AppConfig,
+    engine: SignalEngine,
+    health: ProviderHealth,
+    lifespan: Callable[[FastAPI], AsyncContextManager[None]] | None = None,
+) -> tuple[FastAPI, DashboardState]:
     state = DashboardState(config, engine, health)
-    api = FastAPI(title="BIST 100 Sinyal Merkezi", docs_url=None, redoc_url=None)
+    api = FastAPI(title="BIST 100 Sinyal Merkezi", docs_url=None, redoc_url=None, lifespan=lifespan)
 
     @api.get("/", response_class=HTMLResponse)
     async def index() -> str:

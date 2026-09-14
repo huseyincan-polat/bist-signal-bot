@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from contextlib import suppress
+from contextlib import asynccontextmanager, suppress
 
 import uvicorn
 
@@ -27,20 +27,20 @@ class SignalBotApplication:
         self.notifier = TelegramNotifier(
             config.telegram_bot_token, config.telegram_chat_id, config.telegram_enabled
         )
-        self.api, self.dashboard = create_dashboard(config, self.engine, self.provider.health)
         self.engine_started = False
         self._provider_ready = False
         self._task: asyncio.Task[None] | None = None
-        self._configure_lifecycle()
+        self.api, self.dashboard = create_dashboard(
+            config, self.engine, self.provider.health, lifespan=self._lifespan
+        )
 
-    def _configure_lifecycle(self) -> None:
-        @self.api.on_event("startup")
-        async def start() -> None:
+    @asynccontextmanager
+    async def _lifespan(self, _api: object):
+        try:
             self._seed_local_history()
             self._task = asyncio.create_task(self._consume(), name="market-data-consumer")
-
-        @self.api.on_event("shutdown")
-        async def stop() -> None:
+            yield
+        finally:
             if self._task:
                 self._task.cancel()
                 with suppress(asyncio.CancelledError):
