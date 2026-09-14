@@ -11,7 +11,7 @@ from indicators.order_blocks import detect_order_block
 
 
 BUFFER_SIZE = 50
-MIN_BARS_FOR_SIGNALS = 35
+MIN_BARS_FOR_SIGNALS = 14
 
 
 @dataclass

@@ -102,7 +102,7 @@ class SignalEngine:
         primed = 0
         for symbol in self.config.symbols:
             candles = self._analysis_candles(symbol)
-            if len(candles) < 35:
+            if len(candles) < MIN_BARS_FOR_SIGNALS:
                 continue
             latest = candles[-1]
             self.signals[symbol] = self._build_signal(

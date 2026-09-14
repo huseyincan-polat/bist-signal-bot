@@ -74,6 +74,7 @@ class ProviderHealth:
     first_frame_type: str | None = None
     kline_frames_received: int = 0
     symbols_with_buffers: int = 0
+    symbols_analysis_ready: int = 0
     last_error: str | None = None
     last_data_at: datetime | None = None
     last_data_by_symbol: dict[str, datetime] = field(default_factory=dict)

@@ -41,6 +41,7 @@ class DashboardState:
             "first_frame_type": self.health.first_frame_type,
             "kline_frames_received": self.health.kline_frames_received,
             "symbols_with_buffers": self.health.symbols_with_buffers,
+            "symbols_analysis_ready": self.health.symbols_analysis_ready,
             "data_state": self.health.data_state.value,
             "ready_for_signals": self.health.ready_for_signals,
             "connected": self.health.connected,

@@ -62,7 +62,6 @@ class BinanceFuturesProvider(RealTimeProvider):
         self.first_frame_type: str | None = None
         self._last_tick_at: dict[str, datetime] = {}
         self._kline_probe_complete = False
-        self._use_tick_kline_fallback = False
 
     @property
     def health(self) -> ProviderHealth:
@@ -70,6 +69,7 @@ class BinanceFuturesProvider(RealTimeProvider):
         health.first_frame_type = self.first_frame_type
         health.kline_frames_received = self.klines.kline_frames_received
         health.symbols_with_buffers = len(self.klines.symbols_with_full_buffers(BUFFER_SIZE))
+        health.symbols_analysis_ready = len(self.klines.symbols_with_min_bars())
         return health
 
     @property
@@ -132,8 +132,7 @@ class BinanceFuturesProvider(RealTimeProvider):
                             now = datetime.now(UTC)
                             self._last_tick_at[tick.symbol] = now
                             self._monitor.record_tick(tick, real_time=True)
-                            if self._use_tick_kline_fallback:
-                                self.klines.upsert_from_tick(tick)
+                            self.klines.upsert_from_tick(tick)
                             if not self._first_tick_logged:
                                 logger.info(
                                     "Binance Futures live tick: symbol=%s price=%s",
@@ -168,7 +167,7 @@ class BinanceFuturesProvider(RealTimeProvider):
         url = f"{self.config.binance_websocket_url.rstrip('/')}/ws"
         suffix = f"@kline_{interval}"
         failures = 0
-        probe_started = datetime.now(UTC)
+        btc_probe = False
         while not stop.is_set():
             try:
                 async with websockets.connect(
@@ -178,8 +177,9 @@ class BinanceFuturesProvider(RealTimeProvider):
                     close_timeout=5,
                 ) as socket:
                     failures = 0
-                    await self._subscribe_batches(socket, self.symbols, suffix, start_id=1)
-                    logger.info("Binance kline_%s connected: symbols=%s", interval, len(self.symbols))
+                    active_symbols = ("BTCUSDT",) if btc_probe else self.symbols
+                    await self._subscribe_batches(socket, active_symbols, suffix, start_id=1)
+                    logger.info("Binance kline_%s connected: symbols=%s", interval, len(active_symbols))
                     while not stop.is_set():
                         raw_message = await asyncio.wait_for(socket.recv(), timeout=30)
                         self._log_raw_frame(raw_message)
@@ -190,18 +190,16 @@ class BinanceFuturesProvider(RealTimeProvider):
                                 self.klines.upsert_kline(candle, is_closed)
                                 if interval == "1m" and not self._kline_probe_complete:
                                     self._kline_probe_complete = True
-                                    self._use_tick_kline_fallback = False
                                     logger.info("Binance kline_%s frames flowing for %s", interval, candle.symbol)
+                                if btc_probe:
+                                    remaining = tuple(symbol for symbol in self.symbols if symbol != "BTCUSDT")
+                                    await self._subscribe_batches(socket, remaining, suffix, start_id=2)
+                                    btc_probe = False
             except (OSError, websockets.WebSocketException, asyncio.TimeoutError):
                 failures += 1
-                if (
-                    interval == "1m"
-                    and not self._kline_probe_complete
-                    and (datetime.now(UTC) - probe_started).total_seconds() >= 30
-                ):
-                    self._use_tick_kline_fallback = True
-                    self._kline_probe_complete = True
-                    logger.warning("Binance kline_1m silent; falling back to bookTicker 1m synthesis")
+                if interval == "1m" and not btc_probe and not self._kline_probe_complete:
+                    logger.warning("Binance kline_%s batch silent; probing BTCUSDT", interval)
+                    btc_probe = True
                 await asyncio.sleep(min(self.config.reconnect_backoff_seconds * 2 ** (failures - 1), 60))
 
     async def _prune_silent_symbols(self, stop: asyncio.Event) -> None:
