@@ -48,9 +48,17 @@ Demo uç noktası BIST gerçek zamanlı sinyalleri için kullanılmaz; demo/veri
 
 `config.yaml` BIST 100 takip listesini içerir. Endeks bileşenleri değiştiğinde, bu listeyi sağlayıcının yetkili enstrüman profiline göre gözden geçirin.
 
+## iTick BIST 30 sağlayıcısı
+
+`DATA_PROVIDER=itick` seçildiğinde uygulama yalnızca `config.yaml` içindeki 30 likit BIST hissesi için iTick aboneliği açar. BIST 100 takip listesi dxFeed/mock akışları için korunur; iTick adaptörü 100 sembole abone olmaz.
+
+Adaptör, iTick'in [resmî WebSocket belgelerindeki](https://docs.itick.org/en/websocket/stocks) ürün uç noktasını (`wss://api-free.itick.org/stock`), `token` WebSocket üstbilgisini ve `SYMBOL$TR` abonelik biçimini kullanır. `quote,tick,depth` yanıtları yayımlanan `data.s`, `data.ld`, `data.t` ve `data.v` alanlarından ayrıştırılır. iTick'in [Türkiye entegrasyon rehberi](https://blog.itick.org/en/stock-api/turkey-stock-api-bist-real-time-depth-historical-data-technical) BIST için `$TR` biçimini ve bu akışı doğrular.
+
+Gerçek zamanlılık için bağlantı, taze akış mesajı ve tüm BIST 30 sembol kapsamı kontrol edilir. Bu koşullardan biri bozulursa panel `⚠️ REAL-TIME DATA NOT AVAILABLE` kilidine döner; Telegram bildirimi gönderilmez.
+
 ## İçerik
 
-- `data/`: bağımsız `DataProvider` sözleşmesi, `MockProvider`, dxFeed dxLink adaptörü, tick doğrulama, bağlantı sağlığı ve mum verisi
+- `data/`: bağımsız `DataProvider` sözleşmesi, `MockProvider`, dxFeed dxLink ve iTick BIST 30 adaptörleri, tick doğrulama, bağlantı sağlığı ve mum verisi
 - `indicators/`: EMA/SMA/ADX/DI, RSI/MACD/Stochastic/Williams %R/CCI/ROC, ATR/Bollinger, VWAP/OBV/hacim ve fiyat-mum yapısı
 - `strategy/`: ağırlıklı 0–100 skor, BIST 100 piyasa rejimi ve göreli güç
 - `risk/`: ATR + swing stop ile 1R/2R/3R analitik hedefleri

@@ -16,6 +16,45 @@ dxfeed:
   websocket_url_env: DXFEED_WS_URL
   token_env: DXFEED_TOKEN
   index_symbol: XU100:TR
+itick:
+  # Official stock endpoint. iTick documents authentication through the token
+  # WebSocket header and Turkish stock codes as SYMBOL$TR.
+  websocket_url_env: ITICK_WS_URL
+  websocket_url: wss://api-free.itick.org/stock
+  api_key_env: ITICK_API_KEY
+  region: TR
+  # iTick is intentionally limited to this liquid 30-stock watchlist.
+  symbols:
+    - THYAO
+    - GARAN
+    - AKBNK
+    - EREGL
+    - KCHOL
+    - BIMAS
+    - TUPRS
+    - ASELS
+    - ISCTR
+    - SAHOL
+    - SISE
+    - PETKM
+    - TCELL
+    - FROTO
+    - TOASO
+    - YKBNK
+    - VAKBN
+    - HALKB
+    - TSKB
+    - ENKAI
+    - KOZAL
+    - GUBRF
+    - PGSUS
+    - MGROS
+    - TAVHL
+    - ARCLK
+    - KRDMD
+    - SASA
+    - TTKOM
+    - ULKER
 scoring:
   bullish_regime_penalty: 0
   bearish_regime_penalty: 12

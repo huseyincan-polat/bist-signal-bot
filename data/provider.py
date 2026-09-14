@@ -36,6 +36,16 @@ class DataProvider(ABC):
     @abstractmethod
     def health(self) -> ProviderHealth: ...
 
+    def health_check(self) -> dict[str, bool | str | None]:
+        """Return a provider-agnostic live-data readiness snapshot."""
+        health = self.health
+        return {
+            "connected": health.connected,
+            "last_message_fresh": health.data_state.value == "REAL_TIME",
+            "data_state": health.data_state.value,
+            "last_message_at": health.last_data_at.isoformat() if health.last_data_at else None,
+        }
+
 
 class RealTimeProvider(DataProvider):
     """Marker base for an entitled vendor-backed real-time source."""
@@ -203,6 +213,10 @@ class DxFeedProvider(RealTimeProvider, HistoricalProvider):
 
 
 def create_provider(config: AppConfig) -> DataProvider:
+    if config.provider_name == "itick":
+        from data.itick_provider import ITickRealTimeProvider
+
+        return ITickRealTimeProvider(config)
     if config.provider_name == "dxfeed":
         return DxFeedProvider(config)
     if config.provider_name == "mock":
