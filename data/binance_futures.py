@@ -48,7 +48,12 @@ class BinanceFuturesProvider(RealTimeProvider, HistoricalProvider):
         return self._monitor.refresh_freshness()
 
     async def connect(self) -> None:
-        symbols, previous_closes = await asyncio.to_thread(self._refresh_universe)
+        try:
+            symbols, previous_closes = await asyncio.to_thread(self._refresh_universe)
+        except httpx.HTTPStatusError as error:
+            self._monitor.mark_error(f"Binance Futures universe HTTP {error.response.status_code}")
+            logger.warning("Binance Futures universe request failed: HTTP %s", error.response.status_code)
+            raise
         if not symbols:
             self._monitor.mark_error("Binance Futures universe is unavailable")
             raise RuntimeError("No Binance USDT perpetual symbols available")
