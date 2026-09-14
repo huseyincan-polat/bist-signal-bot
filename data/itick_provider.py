@@ -92,6 +92,10 @@ class ITickRealTimeProvider(RealTimeProvider):
                             logger.info("iTick authenticated; BIST 30 subscription requested")
                             continue
                         if self._subscription_failed(message):
+                            logger.warning(
+                                "iTick BIST 30 subscription rejected (code=%s)",
+                                message.get("code"),
+                            )
                             raise PermissionError("iTick BIST 30 subscription was rejected")
                         tick = self.parse_message(message)
                         if tick and self._validator.validate(tick).accepted:
