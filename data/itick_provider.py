@@ -125,9 +125,12 @@ class ITickRealTimeProvider(RealTimeProvider):
                         async for tick in self._stream_group(socket, index, symbols):
                             consecutive_failures = 0
                             yield tick
-                        # Some free-tier connections close after unsubscribe. Keep
-                        # the cursor so the reconnect resumes at the next group.
+                        # The free endpoint closes after an unsubscribe. Close this
+                        # connection deliberately and resume on the next group.
                         self._next_group_index = (index + 1) % len(groups)
+                        consecutive_failures = 0
+                        await socket.close()
+                        break
             except (OSError, websockets.WebSocketException, asyncio.TimeoutError, PermissionError, ConnectionError) as error:
                 self._monitor.mark_error("iTick stream unavailable")
                 consecutive_failures += 1
@@ -152,6 +155,7 @@ class ITickRealTimeProvider(RealTimeProvider):
             if self._authentication_failed(message):
                 raise PermissionError("iTick authentication failed")
             if self._authentication_succeeded(message):
+                logger.info("iTick authenticated")
                 return
 
     async def _stream_group(
