@@ -209,13 +209,13 @@ class BinanceFuturesProvider(RealTimeProvider):
             silent = [
                 symbol
                 for symbol in self.symbols
-                if symbol not in self._last_tick_at
-                or (now - self._last_tick_at[symbol]).total_seconds() > SYMBOL_SILENCE_SECONDS
+                if symbol in self._last_tick_at
+                and (now - self._last_tick_at[symbol]).total_seconds() > SYMBOL_SILENCE_SECONDS
             ]
             if not silent:
                 continue
             remaining = tuple(symbol for symbol in self.symbols if symbol not in silent)
-            if len(remaining) == len(self.symbols):
+            if len(remaining) == len(self.symbols) or len(remaining) < max(10, len(self.symbols) // 2):
                 continue
             logger.warning("Dropping silent symbols after %ss: %s", SYMBOL_SILENCE_SECONDS, silent)
             self.symbols = remaining
