@@ -2,7 +2,7 @@ from dataclasses import replace
 
 from dashboard.app import DASHBOARD_HTML, DashboardState
 from data.historical import synthetic_candles
-from data.models import MarketTick
+from data.models import DataState, MarketTick
 from data.realtime import ConnectionMonitor
 from strategy.signal_engine import SignalEngine
 from tests.conftest import make_config
@@ -48,3 +48,15 @@ def test_dashboard_calculates_cached_previous_close_price_change() -> None:
     row = dashboard._row("THYAO", None)
     assert row["price_change"] == 1.08
     assert row["price_change_pct"] == 1.5
+
+
+def test_delayed_provider_rows_are_never_labelled_live() -> None:
+    config = replace(make_config(), symbols=("THYAO",))
+    engine = SignalEngine(config, "yfinance delayed batch")
+    monitor = ConnectionMonitor("yfinance delayed batch", {"THYAO"}, 45)
+    monitor.mark_connected()
+    tick = MarketTick("THYAO", 100, synthetic_candles("THYAO", "daily", 1)[0].timestamp)
+    monitor.record_tick(tick, real_time=False, data_state=DataState.STALE_DATA)
+    dashboard = DashboardState(config, engine, monitor.health)
+    dashboard.record_tick(tick)
+    assert dashboard._row("THYAO", None)["row_data_state"] == "STALE_DATA"

@@ -64,7 +64,9 @@ class DashboardState:
         live_at = self.health.last_data_by_symbol.get(symbol)
         live_age = round((datetime.now(UTC) - live_at).total_seconds(), 1) if live_at else None
         price, previous_close, price_change, price_change_pct = self._price_change(symbol, signal)
-        if live_at is None:
+        if self.health.data_state.value != "REAL_TIME" and live_at is not None:
+            row_data_state = "STALE_DATA"
+        elif live_at is None:
             row_data_state = "PRIMED" if signal else "WAITING_LIVE"
         elif self.health.symbol_is_stale(symbol):
             row_data_state = "STALE_DATA"
