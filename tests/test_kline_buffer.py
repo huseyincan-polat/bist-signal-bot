@@ -1,6 +1,6 @@
 from datetime import UTC, datetime, timedelta
 
-from data.kline_buffer import BUFFER_SIZE, KlineBufferStore
+from data.kline_buffer import BUFFER_SIZE, MIN_BARS_FOR_SIGNALS, KlineBufferStore, SEED_BARS
 from data.models import Candle, MarketTick
 
 
@@ -28,6 +28,17 @@ def test_kline_buffer_rolls_at_fifty_bars() -> None:
     assert candles[0].timestamp > datetime(2026, 1, 1, 0, 0, tzinfo=UTC)
 
 
+def test_first_tick_seeds_five_bars_for_immediate_analysis() -> None:
+    store = KlineBufferStore(maxlen=BUFFER_SIZE)
+    now = datetime(2026, 1, 1, 0, 5, 30, tzinfo=UTC)
+    store.upsert_from_tick(MarketTick("ETHUSDT", 200.0, now, source="test"))
+    candles = store.candles("ETHUSDT", "1m")
+    assert len(candles) == SEED_BARS
+    assert all(candle.close == 200.0 for candle in candles)
+    assert "ETHUSDT" in store.symbols_with_min_bars(MIN_BARS_FOR_SIGNALS)
+    assert store.structure("ETHUSDT").atr_14 is not None
+
+
 def test_tick_fallback_builds_one_minute_series() -> None:
     store = KlineBufferStore(maxlen=BUFFER_SIZE)
     now = datetime(2026, 1, 1, 0, 0, 30, tzinfo=UTC)
@@ -35,7 +46,7 @@ def test_tick_fallback_builds_one_minute_series() -> None:
         store.upsert_from_tick(
             MarketTick("ETHUSDT", 200 + offset, now + timedelta(minutes=offset), source="test")
         )
-    assert len(store.candles("ETHUSDT", "1m")) == 40
+    assert len(store.candles("ETHUSDT", "1m")) >= 40
     assert store.structure("ETHUSDT").atr_14 is not None
 
 

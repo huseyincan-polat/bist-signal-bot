@@ -8,8 +8,9 @@ from data.models import Candle
 
 
 def atr(candles: list[Candle], period: int = 14) -> float | None:
-    if len(candles) <= period:
+    if len(candles) < 2:
         return None
+    period = min(period, len(candles) - 1)
     ranges = [
         max(current.high - current.low, abs(current.high - previous.close), abs(current.low - previous.close))
         for previous, current in zip(candles, candles[1:])
