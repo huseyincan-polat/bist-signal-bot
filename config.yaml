@@ -1,0 +1,132 @@
+# Values here are safe defaults for local development. Keep credentials in .env.
+data_provider: mock
+runtime:
+  stale_after_seconds: 45
+  startup_warmup_seconds: 8
+  reconnect_backoff_seconds: 3
+  signal_cooldown_minutes: 20
+dashboard:
+  host: 127.0.0.1
+  port: 8347
+telegram:
+  enabled: false
+dxfeed:
+  # Set DXFEED_WS_URL from your dxFeed welcome letter. Do not use the demo
+  # endpoint for BIST signals: demo access can be delayed or lack BIST rights.
+  websocket_url_env: DXFEED_WS_URL
+  token_env: DXFEED_TOKEN
+  index_symbol: XU100:TR
+scoring:
+  bullish_regime_penalty: 0
+  bearish_regime_penalty: 12
+  buckets:
+    strong_sell_max: 29
+    sell_max: 44
+    wait_max: 59
+    buy_max: 74
+backtest:
+  commission_bps: 10
+  slippage_bps: 5
+bist100:
+  # Review against the exchange/provider entitlement list when constituents change.
+  symbols:
+    - AEFES
+    - AGHOL
+    - AGROT
+    - AKBNK
+    - AKCNS
+    - AKENR
+    - AKFGY
+    - AKFYE
+    - AKSA
+    - AKSEN
+    - ALARK
+    - ALBRK
+    - ALFAS
+    - ANSGR
+    - ARCLK
+    - ASELS
+    - ASTOR
+    - ATAKP
+    - AYDEM
+    - BAGFS
+    - BASGZ
+    - BIMAS
+    - BOBET
+    - BRSAN
+    - BRYAT
+    - BTCIM
+    - CANTE
+    - CCOLA
+    - CIMSA
+    - CLEBI
+    - CWENE
+    - DOAS
+    - DOHOL
+    - EFOR
+    - EGEEN
+    - EKGYO
+    - ENERY
+    - ENJSA
+    - ENKAI
+    - ERBOS
+    - EREGL
+    - EUPWR
+    - FROTO
+    - GARAN
+    - GESAN
+    - GOLTS
+    - GUBRF
+    - GWIND
+    - HALKB
+    - HEKTS
+    - ISCTR
+    - ISDMR
+    - ISGYO
+    - KARSN
+    - KCAER
+    - KCHOL
+    - KLSER
+    - KMPUR
+    - KONTR
+    - KORDS
+    - KOZAA
+    - KOZAL
+    - KRDMD
+    - MAVI
+    - MGROS
+    - MIATK
+    - MPARK
+    - OBASE
+    - ODAS
+    - OTKAR
+    - OYAKC
+    - PASEU
+    - PGSUS
+    - PETKM
+    - REEDR
+    - SAHOL
+    - SASA
+    - SDTTR
+    - SISE
+    - SKBNK
+    - SMRTG
+    - SOKM
+    - TABGD
+    - TAVHL
+    - TCELL
+    - THYAO
+    - TKFEN
+    - TMSN
+    - TOASO
+    - TSKB
+    - TTKOM
+    - TTRAK
+    - TUKAS
+    - TUPRS
+    - TURSG
+    - ULKER
+    - VAKBN
+    - VESTL
+    - YKBNK
+    - ZOREN
