@@ -13,6 +13,8 @@ def test_dashboard_defaults_to_full_ham_liste_view() -> None:
     assert "filter='TUMU'" in DASHBOARD_HTML
     assert "ham liste için Tümü sekmesine geçin" in DASHBOARD_HTML
     assert 'data-filter="ACTIVE">LONG / SHORT' in DASHBOARD_HTML
+    assert "HAM LİSTE" in DASHBOARD_HTML
+    assert "Hüseyin Can Polat tarafından yapılmıştır" in DASHBOARD_HTML
 
 
 def test_dashboard_searches_contract_symbols() -> None:
