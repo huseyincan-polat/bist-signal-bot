@@ -36,8 +36,6 @@ class AppConfig:
     def is_dxfeed_configured(self) -> bool:
         return bool(self.dxfeed_websocket_url and self.dxfeed_token)
 
-    @property
-
 def _read_env(name: str, default: str | None = None) -> str | None:
     value = os.getenv(name, default)
     return value.strip() if value else None
