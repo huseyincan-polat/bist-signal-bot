@@ -49,8 +49,8 @@ def test_itick_rotation_groups_limit_subscription_size_to_three() -> None:
     )
     assert provider.unsubscribe_payload(("SYM0", "SYM1", "SYM2")) == {
         "ac": "unsubscribe",
-        "codes": ["SYM0$TR", "SYM1$TR", "SYM2$TR"],
-        "types": ["quote", "tick", "depth"],
+        "params": "SYM0$TR,SYM1$TR,SYM2$TR",
+        "types": "quote,tick,depth",
     }
 
 

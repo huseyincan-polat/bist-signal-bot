@@ -98,11 +98,11 @@ class ITickRealTimeProvider(RealTimeProvider):
         }
 
     def unsubscribe_payload(self, symbols: tuple[str, ...]) -> dict[str, object]:
-        """Published SDK dynamic-unsubscribe frame for the active rotation group."""
+        """Published raw unsubscribe frame (the SDK serializes ``codes`` to ``params``)."""
         return {
             "ac": "unsubscribe",
-            "codes": [self._wire_symbol(symbol) for symbol in symbols],
-            "types": list(self.SUBSCRIPTION_TYPES),
+            "params": ",".join(self._wire_symbol(symbol) for symbol in symbols),
+            "types": ",".join(self.SUBSCRIPTION_TYPES),
         }
 
     async def stream(self) -> AsyncIterator[MarketTick]:
