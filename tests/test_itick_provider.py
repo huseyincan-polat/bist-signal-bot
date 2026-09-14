@@ -1,3 +1,5 @@
+import asyncio
+import json
 from datetime import UTC, datetime
 
 from app.config import AppConfig, load_config
@@ -62,6 +64,26 @@ def test_itick_rotation_groups_limit_subscription_size_to_three() -> None:
         "params": "SYM0$TR,SYM1$TR,SYM2$TR",
         "types": "quote,tick,depth",
     }
+
+
+def test_iTick_waits_for_unsubscribe_ack_before_next_group() -> None:
+    class Socket:
+        def __init__(self) -> None:
+            self.sent: list[dict[str, object]] = []
+
+        async def send(self, message: str) -> None:
+            self.sent.append(json.loads(message))
+
+        async def recv(self) -> str:
+            return json.dumps({"code": 1, "resAc": "unsubscribe"})
+
+    async def unsubscribe() -> Socket:
+        socket = Socket()
+        await make_itick_provider()._unsubscribe_group(socket, 0, ("THYAO", "EREGL", "KCHOL"))
+        return socket
+
+    socket = asyncio.run(unsubscribe())
+    assert socket.sent[0]["ac"] == "unsubscribe"
 
 
 def test_itick_keeps_each_group_quote_in_memory() -> None:

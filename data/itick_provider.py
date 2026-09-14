@@ -125,12 +125,8 @@ class ITickRealTimeProvider(RealTimeProvider):
                         async for tick in self._stream_group(socket, index, symbols):
                             consecutive_failures = 0
                             yield tick
-                        # The free endpoint closes after an unsubscribe. Close this
-                        # connection deliberately and resume on the next group.
                         self._next_group_index = (index + 1) % len(groups)
-                        consecutive_failures = 0
-                        await socket.close()
-                        break
+                        await self._unsubscribe_group(socket, index, symbols)
             except (OSError, websockets.WebSocketException, asyncio.TimeoutError, PermissionError, ConnectionError) as error:
                 self._monitor.mark_error("iTick stream unavailable")
                 consecutive_failures += 1
@@ -213,7 +209,19 @@ class ITickRealTimeProvider(RealTimeProvider):
             len(self.rotation_groups()),
             saved_ticks,
         )
+
+    async def _unsubscribe_group(
+        self,
+        socket: Any,
+        group_index: int,
+        symbols: tuple[str, ...],
+    ) -> None:
+        """Wait for the provider acknowledgement before subscribing the next group."""
         await socket.send(json.dumps(self.unsubscribe_payload(symbols)))
+        message = await self._receive(socket, timeout=5)
+        if message.get("resAc") != "unsubscribe" or message.get("code") != 1:
+            raise ConnectionError("iTick unsubscribe was not acknowledged")
+        logger.info("iTick rotation group=%s unsubscribed", group_index + 1)
 
     async def _receive(self, socket: Any, timeout: float) -> dict[str, Any]:
         raw_message = await asyncio.wait_for(socket.recv(), timeout=timeout)
