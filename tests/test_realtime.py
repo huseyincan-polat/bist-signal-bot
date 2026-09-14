@@ -12,6 +12,11 @@ def test_validator_rejects_duplicate_out_of_order_and_stale_ticks() -> None:
     assert validator.validate(first, now).reason == "yinelenen tick"
     assert not validator.validate(MarketTick("THYAO", 251, now - timedelta(seconds=1)), now).accepted
     assert validator.validate(MarketTick("THYAO", 252, now - timedelta(seconds=31)), now).reason == "STALE_DATA"
+    assert validator.validate(
+        MarketTick("GARAN", 100, now - timedelta(minutes=15)),
+        now,
+        enforce_freshness=False,
+    ).accepted
 
 
 def test_connection_monitor_requires_all_symbols_and_current_realtime_ticks() -> None:

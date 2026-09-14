@@ -53,7 +53,7 @@ class YahooBatchProvider(HistoricalProvider):
                 ticks = await asyncio.to_thread(self.fetch_batch, list(self.symbols))
                 self._monitor.mark_connected()
                 for tick in ticks:
-                    if self._validator.validate(tick).accepted:
+                    if self._validator.validate(tick, enforce_freshness=False).accepted:
                         self.last_quotes[tick.symbol] = tick
                         self._monitor.record_tick(
                             tick,

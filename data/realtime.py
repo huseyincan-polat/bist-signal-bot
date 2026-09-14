@@ -14,13 +14,19 @@ class TickValidator:
         self.stale_after_seconds = stale_after_seconds
         self._last_tick: dict[str, MarketTick] = {}
 
-    def validate(self, tick: MarketTick, now: datetime | None = None) -> ValidationResult:
+    def validate(
+        self,
+        tick: MarketTick,
+        now: datetime | None = None,
+        *,
+        enforce_freshness: bool = True,
+    ) -> ValidationResult:
         now = now or datetime.now(UTC)
         if tick.timestamp.tzinfo is None:
             return ValidationResult(False, "timestamp timezone bilgisi yok")
         if tick.price <= 0:
             return ValidationResult(False, "geçersiz fiyat")
-        if (now - tick.timestamp).total_seconds() > self.stale_after_seconds:
+        if enforce_freshness and (now - tick.timestamp).total_seconds() > self.stale_after_seconds:
             return ValidationResult(False, "STALE_DATA")
         if (tick.timestamp - now).total_seconds() > 10:
             return ValidationResult(False, "gelecek zaman damgası")
