@@ -7,7 +7,10 @@ from indicators.trend import ema
 
 
 def rsi(values: list[float], period: int = 14) -> float | None:
-    if len(values) <= period:
+    if len(values) < 2:
+        return None
+    period = min(period, len(values) - 1)
+    if period < 1:
         return None
     gains = [max(0, current - previous) for previous, current in zip(values, values[1:])]
     losses = [max(0, previous - current) for previous, current in zip(values, values[1:])]
@@ -20,22 +23,33 @@ def rsi(values: list[float], period: int = 14) -> float | None:
     return round(100 - 100 / (1 + avg_gain / avg_loss), 2)
 
 
-def macd(values: list[float]) -> tuple[float | None, float | None, float | None]:
-    if len(values) < 35:
+def macd(
+    values: list[float],
+    fast_period: int = 12,
+    slow_period: int = 26,
+    signal_period: int = 9,
+) -> tuple[float | None, float | None, float | None]:
+    min_len = slow_period + signal_period
+    if len(values) < max(3, min_len // 2):
         return None, None, None
-    fast, slow = ema(values, 12), ema(values, 26)
+    fast_period = min(fast_period, max(2, len(values) - 1))
+    slow_period = min(slow_period, max(fast_period + 1, len(values)))
+    signal_period = min(signal_period, max(2, len(values) - slow_period))
+    fast, slow = ema(values, fast_period), ema(values, slow_period)
     if fast is None or slow is None:
         return None, None, None
     series = []
-    for index in range(26, len(values) + 1):
-        value = (ema(values[:index], 12) or 0) - (ema(values[:index], 26) or 0)
+    for index in range(slow_period, len(values) + 1):
+        value = (ema(values[:index], fast_period) or 0) - (ema(values[:index], slow_period) or 0)
         series.append(value)
-    signal = ema(series, 9)
-    return round(fast - slow, 4), round(signal, 4) if signal is not None else None, round(fast - slow - signal, 4) if signal is not None else None
+    signal = ema(series, signal_period)
+    histogram = fast - slow - signal if signal is not None else None
+    return round(fast - slow, 4), round(signal, 4) if signal is not None else None, round(histogram, 4) if histogram is not None else None
 
 
 def stochastic(candles: list[Candle], period: int = 14) -> float | None:
-    if len(candles) < period:
+    period = min(period, len(candles))
+    if period < 2:
         return None
     window = candles[-period:]
     high, low = max(item.high for item in window), min(item.low for item in window)
@@ -48,7 +62,8 @@ def williams_r(candles: list[Candle], period: int = 14) -> float | None:
 
 
 def cci(candles: list[Candle], period: int = 20) -> float | None:
-    if len(candles) < period:
+    period = min(period, len(candles))
+    if period < 2:
         return None
     typical = [(item.high + item.low + item.close) / 3 for item in candles[-period:]]
     average = sum(typical) / period
@@ -58,14 +73,23 @@ def cci(candles: list[Candle], period: int = 20) -> float | None:
 
 def calculate(candles: list[Candle]) -> dict[str, float | None]:
     closes = [item.close for item in candles]
-    macd_line, signal, histogram = macd(closes)
+    count = len(closes)
+    rsi_period = min(14, max(3, count - 1))
+    if count < 12:
+        macd_params = (3, 6, 3)
+    elif count < 20:
+        macd_params = (5, 10, 4)
+    else:
+        macd_params = (12, 26, 9)
+    macd_line, signal, histogram = macd(closes, *macd_params)
+    roc_lookback = min(13, max(2, count - 1))
     return {
-        "rsi_14": rsi(closes),
+        "rsi_14": rsi(closes, rsi_period),
         "macd": macd_line,
         "macd_signal": signal,
         "macd_histogram": histogram,
-        "stochastic": stochastic(candles),
-        "williams_r": williams_r(candles),
-        "cci": cci(candles),
-        "roc": round((closes[-1] / closes[-13] - 1) * 100, 2) if len(closes) >= 14 else None,
+        "stochastic": stochastic(candles, min(14, max(3, count))),
+        "williams_r": williams_r(candles, min(14, max(3, count))),
+        "cci": cci(candles, min(20, max(3, count))),
+        "roc": round((closes[-1] / closes[-roc_lookback - 1] - 1) * 100, 2) if count > roc_lookback else None,
     }

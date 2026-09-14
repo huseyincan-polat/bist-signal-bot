@@ -8,10 +8,11 @@ from strategy.signal_engine import SignalEngine
 from tests.conftest import make_config
 
 
-def test_dashboard_defaults_to_actionable_long_short_view() -> None:
+def test_dashboard_defaults_to_full_ham_liste_view() -> None:
+    assert 'data-filter="TUMU"' in DASHBOARD_HTML
+    assert "filter='TUMU'" in DASHBOARD_HTML
+    assert "ham liste için Tümü sekmesine geçin" in DASHBOARD_HTML
     assert 'data-filter="ACTIVE">LONG / SHORT' in DASHBOARD_HTML
-    assert "filter='ACTIVE'" in DASHBOARD_HTML
-    assert "['LONG','GÜÇLÜ LONG','SHORT','GÜÇLÜ SHORT']" in DASHBOARD_HTML
 
 
 def test_dashboard_searches_contract_symbols() -> None:

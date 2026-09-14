@@ -2,17 +2,18 @@
 
 from __future__ import annotations
 
-from collections import defaultdict
+from collections import defaultdict, deque
 from datetime import UTC, datetime, timedelta
 
 from app.config import AppConfig
 from data.kline_buffer import KlineBufferStore, MIN_BARS_FOR_SIGNALS
 from data.models import Candle, MarketTick, Signal, SignalState
 from indicators import momentum, patterns, price_action, trend, volatility, volume
-from risk.targets import structure_risk_plan
+from risk.scalping import scalping_risk_plan
 from strategy.market_regime import classify_market_regime
 from strategy.relative_strength import relative_strength, score as relative_score
-from strategy.scoring import aggregate, classify, is_bullish, meaningful_transition
+from strategy.scalping import scalping_score, tick_momentum_pct
+from strategy.scoring import classify, is_bullish, meaningful_transition
 
 
 class SignalEngine:
@@ -23,6 +24,7 @@ class SignalEngine:
         self.provider_name = provider_name
         self._candles: dict[str, dict[str, list[Candle]]] = defaultdict(dict)
         self._previous_closes: dict[str, float] = {}
+        self._tick_prices: dict[str, deque[float]] = defaultdict(lambda: deque(maxlen=24))
         self.signals: dict[str, Signal] = {}
         self._last_alert_at: dict[str, datetime] = {}
         self._pending_previous: dict[str, SignalState | None] = {}
@@ -105,6 +107,7 @@ class SignalEngine:
             if len(candles) < MIN_BARS_FOR_SIGNALS:
                 continue
             latest = candles[-1]
+            self._tick_prices[symbol].append(latest.close)
             self.signals[symbol] = self._build_signal(
                 MarketTick(
                     symbol=symbol,
@@ -118,34 +121,10 @@ class SignalEngine:
             primed += 1
         return primed
 
-    def _timeframe_candles(self, symbol: str, timeframe: str) -> list[Candle]:
-        if self._kline_store and timeframe in {"1m", "1h"}:
-            ws_candles = self._kline_store.candles(symbol, timeframe)
-            if ws_candles:
-                return ws_candles
-        direct = self._candles[symbol].get(timeframe)
-        if direct:
-            return direct
-        multiplier = {"5m": 5, "15m": 15, "1h": 60, "daily": 1440}.get(timeframe)
-        source = self._candles[symbol].get("1m", [])
-        if not multiplier or len(source) < multiplier:
-            return source
-        aggregated: list[Candle] = []
-        for index in range(0, len(source), multiplier):
-            group = source[index:index + multiplier]
-            if len(group) < multiplier:
-                continue
-            aggregated.append(Candle(
-                symbol=symbol, timeframe=timeframe, timestamp=group[0].timestamp,
-                open=group[0].open, high=max(item.high for item in group),
-                low=min(item.low for item in group), close=group[-1].close,
-                volume=sum(item.volume for item in group),
-            ))
-        return aggregated
-
-    @staticmethod
-    def _trend_score(value: str | None) -> float:
-        return {"YÜKSELİŞ": 100, "DÜŞÜŞ": 0}.get(value or "", 50)
+    def _record_tick_price(self, tick: MarketTick) -> float:
+        prices = self._tick_prices[tick.symbol]
+        prices.append(tick.price)
+        return tick_momentum_pct(list(prices))
 
     def on_tick(self, tick: MarketTick) -> Signal | None:
         """Incrementally update only the affected symbol then recalculate it."""
@@ -154,7 +133,7 @@ class SignalEngine:
         self._update_current_candle(tick)
         self._update_daily_candle(tick)
         if tick.symbol == self.index_symbol:
-            self.market_regime = classify_market_regime(self._timeframe_candles(tick.symbol, "daily"))
+            self.market_regime = classify_market_regime(self._analysis_candles(tick.symbol))
             return None
         if tick.symbol not in self.config.symbols:
             return None
@@ -168,6 +147,7 @@ class SignalEngine:
         return signal
 
     def _build_signal(self, tick: MarketTick, candles: list[Candle]) -> Signal:
+        tick_accel = self._record_tick_price(tick)
         trend_values = trend.calculate(candles)
         momentum_values = momentum.calculate(candles)
         volume_values = volume.calculate(candles)
@@ -184,56 +164,27 @@ class SignalEngine:
         candle_patterns = patterns.calculate(candles)
         index_candles = self._analysis_candles(self.index_symbol)
         rs = relative_strength(candles, index_candles)
-        mtf_trends = [
-            self._trend_score(trend.calculate(self._timeframe_candles(tick.symbol, timeframe)).get("trend"))
-            for timeframe in ("15m", "1h", "daily")
-        ]
-        momentum_score = 50.0
-        rsi = momentum_values["rsi_14"]
-        if isinstance(rsi, float):
-            momentum_score = 50 + (rsi - 50) * 1.2
-        if (momentum_values["macd_histogram"] or 0) > 0:
-            momentum_score += 10
-        components = {
-            "trend": self._trend_score(str(trend_values["trend"])),
-            "momentum": momentum_score,
-            "volume": 70 if volume_values["volume_spike"] and tick.price >= (volume_values["vwap"] or tick.price) else 45,
-            "breakout": 100 if structure["breakout"] else 0 if structure["breakdown"] else 50,
-            "volatility": 65 if (volatility_values["bb_width"] or 0) < 0.15 else 45,
-            "multi_timeframe": sum(mtf_trends) / len(mtf_trends),
-            "market_regime": {"BULLISH": 100, "BEARISH": 0}.get(self.market_regime, 50),
-            "relative_strength": relative_score(rs),
-        }
-        score = aggregate(
-            components,
-            self.market_regime,
-            int(self.config.scoring.get("bearish_regime_penalty", 12)),
+        score = scalping_score(
+            momentum_values["rsi_14"],
+            momentum_values["macd_histogram"],
+            tick_accel,
+            bool(volume_values["volume_spike"]),
+            (volatility_values["bb_width"] or 0) > 0.12,
         )
         state = classify(score, self.config.scoring.get("buckets"))
         risk_plan = None
         if state is not SignalState.WAIT:
             bullish = is_bullish(state)
-            risk_plan = structure_risk_plan(
-                tick.price,
-                volatility_values["atr_14"],
-                structure["swing_low"],
-                structure["swing_high"],
-                bullish,
-            )
-            if not risk_plan.valid:
-                state = SignalState.WAIT
-        reasons = self._reasons(trend_values, momentum_values, volume_values, structure, candle_patterns, rs)
-        if risk_plan and not risk_plan.valid:
-            reasons.append(f"Risk filtresi: {risk_plan.reason}")
+            risk_plan = scalping_risk_plan(tick.price, bullish)
+        reasons = self._reasons(trend_values, momentum_values, volume_values, structure, candle_patterns, rs, tick_accel)
         metrics: dict[str, float | str | None] = {
             "rsi": momentum_values["rsi_14"],
             "macd": momentum_values["macd"],
             "adx": trend_values["adx"],
+            "atr": volatility_values["atr_14"],
             "relative_volume": volume_values["relative_volume"],
             "trend": str(trend_values["trend"]),
-            "15m": self._timeframe_label(tick.symbol, "15m"),
-            "1h": self._timeframe_label(tick.symbol, "1h"),
-            "daily": self._timeframe_label(tick.symbol, "daily"),
+            "tick_momentum": tick_accel,
             "relative_strength": rs,
             "market_regime": self.market_regime,
             "data_quality": "LIVE" if tick.source == self.provider_name else "DELAYED_HISTORICAL",
@@ -254,9 +205,6 @@ class SignalEngine:
             metrics=metrics,
         )
 
-    def _timeframe_label(self, symbol: str, timeframe: str) -> str:
-        return str(trend.calculate(self._timeframe_candles(symbol, timeframe)).get("trend", "NÖTR"))
-
     @staticmethod
     def _reasons(
         trend_values: dict[str, float | str | None],
@@ -265,10 +213,13 @@ class SignalEngine:
         structure: dict[str, float | bool | str | None],
         candle_patterns: dict[str, bool],
         rs: float | None,
+        tick_accel: float,
     ) -> list[str]:
-        reasons = [f"Trend: {trend_values['trend']}"]
+        reasons = [f"Tick ivme: {tick_accel:+.3f}%", f"Trend: {trend_values['trend']}"]
         if momentum_values["rsi_14"] is not None:
-            reasons.append(f"RSI(14): {momentum_values['rsi_14']}")
+            reasons.append(f"RSI: {momentum_values['rsi_14']}")
+        if momentum_values["macd_histogram"] is not None:
+            reasons.append(f"MACD hist: {momentum_values['macd_histogram']}")
         if volume_values["relative_volume"] is not None:
             reasons.append(f"Bağıl hacim: {volume_values['relative_volume']}x")
         if structure["breakout"]:

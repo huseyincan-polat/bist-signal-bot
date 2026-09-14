@@ -10,7 +10,7 @@ def calculate(candles: list[Candle]) -> dict[str, float | bool | None]:
     if not candles:
         return {"volume": None, "volume_sma_20": None, "relative_volume": None, "obv": None, "vwap": None, "volume_spike": False}
     volumes = [item.volume for item in candles]
-    average = sma(volumes, 20)
+    average = sma(volumes, min(20, max(3, len(volumes))))
     relative = volumes[-1] / average if average else None
     obv = 0.0
     for previous, current in zip(candles, candles[1:]):

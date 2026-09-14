@@ -8,11 +8,12 @@ from tests.conftest import make_config
 
 
 def test_score_bucket_boundaries() -> None:
-    assert classify(29) is SignalState.STRONG_SELL
-    assert classify(30) is SignalState.SELL
-    assert classify(45) is SignalState.WAIT
-    assert classify(60) is SignalState.BUY
-    assert classify(75) is SignalState.STRONG_BUY
+    buckets = {"strong_sell_max": 32, "sell_max": 47, "wait_max": 52, "buy_max": 67}
+    assert classify(32, buckets) is SignalState.STRONG_SELL
+    assert classify(40, buckets) is SignalState.SELL
+    assert classify(50, buckets) is SignalState.WAIT
+    assert classify(55, buckets) is SignalState.BUY
+    assert classify(70, buckets) is SignalState.STRONG_BUY
 
 
 def test_signal_engine_calculates_multi_timeframe_signal() -> None:

@@ -19,12 +19,12 @@ universe:
   symbols: []
   benchmark_symbol: BTCUSDT
 scoring:
-  bearish_regime_penalty: 12
+  bearish_regime_penalty: 6
   buckets:
-    strong_sell_max: 29
-    sell_max: 44
-    wait_max: 59
-    buy_max: 74
+    strong_sell_max: 32
+    sell_max: 47
+    wait_max: 52
+    buy_max: 67
 backtest:
   commission_bps: 10
   slippage_bps: 5
