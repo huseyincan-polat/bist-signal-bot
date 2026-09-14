@@ -72,6 +72,7 @@ class ITickRealTimeProvider(RealTimeProvider):
 
     async def stream(self) -> AsyncIterator[MarketTick]:
         await self.connect()
+        consecutive_failures = 0
         while True:
             heartbeat: asyncio.Task[None] | None = None
             try:
@@ -95,15 +96,24 @@ class ITickRealTimeProvider(RealTimeProvider):
                         tick = self.parse_message(message)
                         if tick and self._validator.validate(tick).accepted:
                             self._monitor.record_tick(tick, real_time=True)
+                            consecutive_failures = 0
                             if not self._first_live_tick_logged:
                                 logger.info("iTick live tick received for %s", tick.symbol)
                                 self._first_live_tick_logged = True
                             yield tick
                 raise ConnectionError("iTick stream closed")
-            except (OSError, websockets.WebSocketException, asyncio.TimeoutError, PermissionError, ConnectionError):
+            except (OSError, websockets.WebSocketException, asyncio.TimeoutError, PermissionError, ConnectionError) as error:
                 self._monitor.mark_error("iTick stream unavailable")
-                logger.warning("iTick stream unavailable; reconnecting")
-                await asyncio.sleep(self.config.reconnect_backoff_seconds)
+                consecutive_failures += 1
+                delay = min(self.config.reconnect_backoff_seconds * 2 ** (consecutive_failures - 1), 60)
+                # Class/code are safe diagnostic evidence; exception text may contain secrets.
+                logger.warning(
+                    "iTick stream unavailable (%s, code=%s); reconnecting in %ss",
+                    type(error).__name__,
+                    getattr(error, "code", None),
+                    delay,
+                )
+                await asyncio.sleep(delay)
             finally:
                 if heartbeat:
                     heartbeat.cancel()
