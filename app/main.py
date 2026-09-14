@@ -29,6 +29,7 @@ class SignalBotApplication:
         )
         self.api, self.dashboard = create_dashboard(config, self.engine, self.provider.health)
         self.engine_started = False
+        self._provider_ready = False
         self._task: asyncio.Task[None] | None = None
         self._configure_lifecycle()
 
@@ -62,9 +63,14 @@ class SignalBotApplication:
                 health = self.provider.health
                 self.dashboard.record_tick(tick)
                 # Steps 2–4 are satisfied only by accepted, current ticks for every symbol.
-                if not self.engine_started and health.ready_for_signals:
+                if health.ready_for_signals and not self._provider_ready:
+                    # Re-read documented dxLink Candle backfill after coverage verification.
+                    self._seed_local_history()
                     self.engine_started = True
+                    self._provider_ready = True
                     logger.info("Real-time verification passed; starting analysis engine")
+                elif not health.ready_for_signals:
+                    self._provider_ready = False
                 # Mock, delayed, stale, partial, and disconnected data cannot run the engine.
                 if not self.engine_started or not health.ready_for_signals:
                     if tick.symbol in self.config.symbols:
