@@ -16,7 +16,7 @@ from typing import Any
 import websockets
 
 from app.config import AppConfig
-from data.kline_buffer import BUFFER_SIZE, KlineBufferStore
+from data.kline_buffer import BUFFER_SIZE, MIN_BARS_FOR_SIGNALS, KlineBufferStore
 from data.models import Candle, MarketTick, ProviderHealth
 from data.provider import RealTimeProvider
 from data.realtime import ConnectionMonitor, TickValidator
@@ -68,8 +68,8 @@ class BinanceFuturesProvider(RealTimeProvider):
         health = self._monitor.refresh_freshness()
         health.first_frame_type = self.first_frame_type
         health.kline_frames_received = self.klines.kline_frames_received
-        health.symbols_with_buffers = len(self.klines.symbols_with_full_buffers(BUFFER_SIZE))
-        health.symbols_analysis_ready = len(self.klines.symbols_with_min_bars())
+        health.symbols_with_buffers = len(self.klines.symbols_with_min_bars(MIN_BARS_FOR_SIGNALS))
+        health.symbols_analysis_ready = health.symbols_with_buffers
         return health
 
     @property

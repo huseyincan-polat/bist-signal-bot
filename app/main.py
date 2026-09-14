@@ -80,8 +80,10 @@ class SignalBotApplication:
                 if analysis_data_ready and not self._provider_ready:
                     self.engine_started = True
                     self._provider_ready = True
+                    primed = self.engine.prime_from_history()
                     logger.info(
-                        "Kline buffers ready; analysis engine started symbols=%s kline_frames=%s",
+                        "Analysis engine started: primed=%s symbols=%s kline_frames=%s",
+                        primed,
                         len(bind_store.symbols_with_min_bars()) if bind_store else 0,
                         getattr(health, "kline_frames_received", 0),
                     )
