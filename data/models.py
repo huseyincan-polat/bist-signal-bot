@@ -71,6 +71,7 @@ class ProviderHealth:
     connected: bool = False
     data_state: DataState = DataState.UNAVAILABLE
     provider: str = "unknown"
+    first_frame_type: str | None = None
     last_error: str | None = None
     last_data_at: datetime | None = None
     last_data_by_symbol: dict[str, datetime] = field(default_factory=dict)

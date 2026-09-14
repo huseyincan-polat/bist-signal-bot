@@ -5,7 +5,7 @@ Binance USDⓈ-M perpetual futures için teknik analiz ve fırsat tarayıcısı.
 ## Veri mimarisi
 
 - Evren, REST erişim kısıtlamalarında dahi WebSocket'in başlayabilmesi için 50 likit USDT perpetual sözleşmeyle sabitlenmiştir.
-- Bu 50 sözleşmenin resmî `aggTrade` combined stream'i `wss://fstream.binance.com/stream?streams=...` üzerinden asenkron tüketilir.
+- Bu 50 sözleşmenin resmî `bookTicker` akışları `wss://fstream.binance.com/ws` üzerinden JSON `SUBSCRIBE` ile asenkron tüketilir.
 - Gösterge serileri, resmî `/fapi/v1/klines` ile geçmiş 1 dakikalık mumlardan iş parçacığında hazırlanır.
 - REST ve WebSocket sözleşmeleri için [Binance USDⓈ-M Futures dokümantasyonu](https://developers.binance.com/docs/derivatives/usds-margined-futures) esas alınır.
 

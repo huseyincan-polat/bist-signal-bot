@@ -38,6 +38,7 @@ class DashboardState:
         sells = sorted((row for row in rows if row["signal"] in ("SHORT", "GÜÇLÜ SHORT")), key=lambda item: item["score"])[:10]
         return {
             "provider": self.health.provider,
+            "first_frame_type": self.health.first_frame_type,
             "data_state": self.health.data_state.value,
             "ready_for_signals": self.health.ready_for_signals,
             "connected": self.health.connected,

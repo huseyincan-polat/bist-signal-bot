@@ -7,27 +7,34 @@ from data.models import MarketTick
 from tests.conftest import make_config
 
 
-def test_parse_combined_aggtrade_message() -> None:
+def test_parse_combined_bookticker_message() -> None:
     provider = BinanceFuturesProvider(replace(make_config("binance_futures")))
     provider.symbols = ("BTCUSDT",)
     provider._previous_closes["BTCUSDT"] = 65_000
     tick = provider.parse_message(
         {
-            "stream": "btcusdt@aggTrade",
+            "stream": "btcusdt@bookTicker",
             "data": {
-                "e": "aggTrade",
+                "e": "bookTicker",
                 "s": "BTCUSDT",
-                "p": "65010.50",
-                "q": "0.012",
-                "T": 1_731_689_407_000,
+                "b": "65010.00",
+                "a": "65011.00",
+                "E": 1_731_689_407_000,
             },
         }
     )
     assert tick is not None
     assert tick.symbol == "BTCUSDT"
     assert tick.price == 65010.5
-    assert tick.tick_volume == 0.012
+    assert tick.bid == 65010.0
+    assert tick.ask == 65011.0
     assert tick.previous_close == 65_000
+
+
+def test_classify_subscription_result_frame() -> None:
+    provider = BinanceFuturesProvider(replace(make_config("binance_futures")))
+    assert provider.classify_frame({"result": None, "id": 1}) == "subscription_result"
+    assert provider.classify_frame({"e": "bookTicker", "s": "BTCUSDT"}) == "bookTicker"
 
 
 def test_binance_historical_priming_runs_away_from_event_loop() -> None:
@@ -65,6 +72,6 @@ def test_raw_websocket_subscription_uses_documented_binance_frame() -> None:
     provider = BinanceFuturesProvider(replace(make_config("binance_futures")))
     assert provider.subscription_frame(("BTCUSDT", "ETHUSDT"), request_id=1) == {
         "method": "SUBSCRIBE",
-        "params": ["btcusdt@aggTrade", "ethusdt@aggTrade"],
+        "params": ["btcusdt@bookTicker", "ethusdt@bookTicker"],
         "id": 1,
     }

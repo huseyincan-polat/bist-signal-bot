@@ -36,9 +36,13 @@ FALLBACK_USDT_PERPETUALS = (
     "MANAUSDT", "RUNEUSDT", "KSMUSDT",
 )
 
+# Official USDⓈ-M market stream suffix. bookTicker is used because aggTrade can be
+# silent on some cloud egress paths while the documented SUBSCRIBE flow still acks.
+STREAM_SUFFIX = "@bookTicker"
+
 
 class BinanceFuturesProvider(RealTimeProvider, HistoricalProvider):
-    """Top-quote-volume USDT perpetual futures with aggTrade streaming."""
+    """Top-quote-volume USDT perpetual futures with bookTicker streaming."""
 
     name = "Binance USDⓈ-M Futures"
 
@@ -56,10 +60,13 @@ class BinanceFuturesProvider(RealTimeProvider, HistoricalProvider):
         self._previous_closes: dict[str, float] = {}
         self._first_tick_logged = False
         self._raw_frames_logged = 0
+        self.first_frame_type: str | None = None
 
     @property
     def health(self) -> ProviderHealth:
-        return self._monitor.refresh_freshness()
+        health = self._monitor.refresh_freshness()
+        health.first_frame_type = self.first_frame_type
+        return health
 
     async def connect(self) -> None:
         self.symbols = FALLBACK_USDT_PERPETUALS
@@ -127,28 +134,37 @@ class BinanceFuturesProvider(RealTimeProvider, HistoricalProvider):
         url = f"{self.config.binance_websocket_url.rstrip('/')}/ws"
         failures = 0
         btc_probe = False
+        awaiting_first_tick = True
         while True:
             try:
-                async with websockets.connect(url, ping_interval=20, close_timeout=5) as socket:
+                async with websockets.connect(
+                    url,
+                    ping_interval=20,
+                    ping_timeout=20,
+                    close_timeout=5,
+                ) as socket:
                     self._monitor.mark_connected()
                     failures = 0
                     active_symbols = ("BTCUSDT",) if btc_probe else self.symbols
                     await socket.send(json.dumps(self.subscription_frame(active_symbols, request_id=1)))
-                    logger.info("Binance Futures WebSocket connected: aggTrade streams=%s", len(active_symbols))
+                    logger.info(
+                        "Binance Futures WebSocket connected: bookTicker streams=%s",
+                        len(active_symbols),
+                    )
                     while True:
-                        raw_message = await asyncio.wait_for(
-                            socket.recv(),
-                            timeout=self.config.stale_after_seconds,
-                        )
-                        self._log_raw_frame(raw_message)
+                        recv_timeout = 30 if awaiting_first_tick else self.config.stale_after_seconds
+                        raw_message = await asyncio.wait_for(socket.recv(), timeout=recv_timeout)
+                        frame_type = self._log_raw_frame(raw_message)
                         tick = self.parse_message(raw_message)
                         if tick and self._validator.validate(tick).accepted:
+                            awaiting_first_tick = False
                             self._monitor.record_tick(tick, real_time=True)
                             if not self._first_tick_logged:
                                 logger.info(
-                                    "Binance Futures live tick: symbol=%s price=%s timestamp=%s",
+                                    "Binance Futures live tick: symbol=%s price=%s frame=%s timestamp=%s",
                                     tick.symbol,
                                     tick.price,
+                                    frame_type,
                                     tick.timestamp.isoformat(),
                                 )
                                 self._first_tick_logged = True
@@ -157,18 +173,23 @@ class BinanceFuturesProvider(RealTimeProvider, HistoricalProvider):
                                 btc_probe = False
                             yield tick
             except (OSError, websockets.WebSocketException, asyncio.TimeoutError):
-                self._monitor.mark_error("Binance Futures stream unavailable")
+                message = "Binance Futures stream unavailable"
+                if self._monitor.health.symbols_received:
+                    self._monitor.mark_transient_error(message)
+                else:
+                    self._monitor.mark_error(message)
                 if not btc_probe:
                     logger.warning("Binance 50-stream subscription was silent; probing BTCUSDT")
                     btc_probe = True
                 failures += 1
+                awaiting_first_tick = True
                 await asyncio.sleep(min(self.config.reconnect_backoff_seconds * 2 ** (failures - 1), 60))
 
     def subscription_frame(self, symbols: tuple[str, ...], request_id: int) -> dict[str, object]:
         """Documented Binance raw WebSocket SUBSCRIBE frame."""
         return {
             "method": "SUBSCRIBE",
-            "params": [f"{symbol.lower()}@aggTrade" for symbol in symbols],
+            "params": [f"{symbol.lower()}{STREAM_SUFFIX}" for symbol in symbols],
             "id": request_id,
         }
 
@@ -179,13 +200,32 @@ class BinanceFuturesProvider(RealTimeProvider, HistoricalProvider):
             await socket.send(json.dumps(self.subscription_frame(batch, request_id)))
         logger.info("Binance BTCUSDT probe succeeded; requested remaining streams in two batches")
 
-    def _log_raw_frame(self, raw_message: str | bytes) -> None:
+    @staticmethod
+    def classify_frame(payload: dict[str, Any]) -> str:
+        if payload.get("e") == "bookTicker":
+            return "bookTicker"
+        if "error" in payload:
+            return "error"
+        if "result" in payload and "id" in payload:
+            return "subscription_result"
+        return str(payload.get("e") or "unknown")
+
+    def _log_raw_frame(self, raw_message: str | bytes) -> str:
         """Log only the first public frames, truncated to prevent noisy terminals."""
-        if self._raw_frames_logged >= 2:
-            return
         preview = raw_message.decode() if isinstance(raw_message, bytes) else raw_message
-        logger.info("Binance WebSocket raw frame: %s", preview[:240])
-        self._raw_frames_logged += 1
+        frame_type = "unknown"
+        try:
+            payload = json.loads(preview)
+            if isinstance(payload, dict):
+                frame_type = self.classify_frame(payload)
+        except json.JSONDecodeError:
+            frame_type = "non_json"
+        if self.first_frame_type is None:
+            self.first_frame_type = frame_type
+        if self._raw_frames_logged < 2:
+            logger.info("Binance WebSocket raw frame [%s]: %s", frame_type, preview[:240])
+            self._raw_frames_logged += 1
+        return frame_type
 
     def parse_message(self, raw_message: str | bytes | dict[str, Any]) -> MarketTick | None:
         if isinstance(raw_message, (str, bytes)):
@@ -196,22 +236,29 @@ class BinanceFuturesProvider(RealTimeProvider, HistoricalProvider):
         else:
             payload = raw_message
         data = payload.get("data", payload)
-        if not isinstance(data, dict) or data.get("e") != "aggTrade":
+        if not isinstance(data, dict) or data.get("e") != "bookTicker":
             return None
-        symbol, price, timestamp = data.get("s"), data.get("p"), data.get("T")
+        symbol = data.get("s")
+        bid, ask = data.get("b"), data.get("a")
+        timestamp = data.get("E") or data.get("T")
         if (
             not isinstance(symbol, str)
             or symbol not in self.symbols
-            or price is None
+            or bid is None
+            or ask is None
             or not isinstance(timestamp, (int, float))
         ):
             return None
         try:
+            bid_f, ask_f = float(bid), float(ask)
+            if bid_f <= 0 or ask_f <= 0:
+                return None
             return MarketTick(
                 symbol=symbol,
-                price=float(price),
+                price=round((bid_f + ask_f) / 2, 8),
                 timestamp=datetime.fromtimestamp(float(timestamp) / 1000, UTC),
-                tick_volume=float(data["q"]) if data.get("q") is not None else None,
+                bid=bid_f,
+                ask=ask_f,
                 previous_close=self._previous_closes.get(symbol),
                 source=self.name,
             )
