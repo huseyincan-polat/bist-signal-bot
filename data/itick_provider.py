@@ -57,6 +57,7 @@ class ITickRealTimeProvider(RealTimeProvider):
         self._first_live_tick_logged = False
         self.successful_live_groups = 0
         self.current_group_index = -1
+        self._next_group_index = 0
 
     @property
     def health(self) -> ProviderHealth:
@@ -116,12 +117,17 @@ class ITickRealTimeProvider(RealTimeProvider):
                     logger.info("iTick WebSocket connected; waiting for authentication")
                     heartbeat = asyncio.create_task(self._heartbeat(socket), name="itick-heartbeat")
                     await self._wait_for_authentication(socket)
+                    groups = self.rotation_groups()
                     while True:
-                        for index, symbols in enumerate(self.rotation_groups()):
-                            self.current_group_index = index
-                            async for tick in self._stream_group(socket, index, symbols):
-                                consecutive_failures = 0
-                                yield tick
+                        index = self._next_group_index
+                        symbols = groups[index]
+                        self.current_group_index = index
+                        async for tick in self._stream_group(socket, index, symbols):
+                            consecutive_failures = 0
+                            yield tick
+                        # Some free-tier connections close after unsubscribe. Keep
+                        # the cursor so the reconnect resumes at the next group.
+                        self._next_group_index = (index + 1) % len(groups)
             except (OSError, websockets.WebSocketException, asyncio.TimeoutError, PermissionError, ConnectionError) as error:
                 self._monitor.mark_error("iTick stream unavailable")
                 consecutive_failures += 1
