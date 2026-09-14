@@ -86,8 +86,9 @@ class ConnectionMonitor:
         real_time: bool,
         data_state: DataState | None = None,
     ) -> None:
-        self.health.last_data_at = tick.timestamp
-        self.health.last_data_by_symbol[tick.symbol] = tick.timestamp
+        received_at = datetime.now(UTC) if real_time else tick.timestamp
+        self.health.last_data_at = received_at
+        self.health.last_data_by_symbol[tick.symbol] = received_at
         self.health.symbols_received.add(tick.symbol)
         self.health.data_state = data_state or (DataState.REAL_TIME if real_time else DataState.MOCK)
 
