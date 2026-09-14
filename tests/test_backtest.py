@@ -8,7 +8,7 @@ def test_backtest_reports_requested_metrics() -> None:
     result = BacktestEngine(config).run(
         {
             "AAA": synthetic_candles("AAA", "1m", 260),
-            "XU100": synthetic_candles("XU100", "1m", 260),
+            "BTCUSDT": synthetic_candles("BTCUSDT", "1m", 260),
         }
     )
     metrics = result.metrics.to_dict()

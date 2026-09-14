@@ -1,4 +1,4 @@
-"""BIST 100 index regime classification."""
+"""Benchmark futures regime classification."""
 
 from __future__ import annotations
 

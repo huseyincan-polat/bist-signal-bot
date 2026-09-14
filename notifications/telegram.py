@@ -36,15 +36,15 @@ class TelegramNotifier:
 
     @staticmethod
     def format_signal(signal: Signal) -> str:
-        targets = " / ".join(f"₺{value:,.2f}" for value in signal.targets)
+        targets = " / ".join(f"{value:,.4f} USDT" for value in signal.targets if value is not None)
         reasons = "\n".join(f"• {reason}" for reason in signal.reasons[:5])
         return (
-            "📊 BIST SİNYALİ\n"
-            f"Hisse: {signal.symbol}\n"
+            "📊 FUTURES SİNYALİ\n"
+            f"Sözleşme: {signal.symbol}\n"
             f"Sinyal: {signal.state.value} ({signal.confidence}/100)\n"
             "Onay: Canlı veriyle Onaylandı\n"
-            f"Fiyat / Giriş: ₺{signal.price:,.2f}\n"
-            f"Stop: ₺{signal.stop:,.2f}\n"
+            f"Fiyat / Giriş: {signal.price:,.4f} USDT\n"
+            f"Stop: {signal.stop:,.4f} USDT\n"
             f"Hedef 1 / 2 / 3: {targets}\n"
             f"Teknik nedenler:\n{reasons}\n"
             f"Veri zamanı: {signal.data_timestamp.strftime('%d.%m.%Y %H:%M:%S UTC')}\n"

@@ -1,4 +1,4 @@
-"""Relative strength against BIST 100."""
+"""Relative strength against the configured benchmark future."""
 
 from __future__ import annotations
 

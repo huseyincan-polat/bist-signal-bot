@@ -1,7 +1,7 @@
 from risk.targets import structure_risk_plan
 
 
-def test_rejects_stop_deeper_than_four_percent() -> None:
+def test_rejects_stop_deeper_than_three_percent() -> None:
     plan = structure_risk_plan(
         entry=100,
         atr=1,
@@ -11,7 +11,7 @@ def test_rejects_stop_deeper_than_four_percent() -> None:
     )
     assert not plan.valid
     assert plan.stop is None
-    assert "azami %4" in (plan.reason or "")
+    assert "azami %3" in (plan.reason or "")
 
 
 def test_rejects_structure_target_below_three_to_one_reward_ratio() -> None:

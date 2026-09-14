@@ -89,10 +89,10 @@ class SignalEngine:
         return intraday if len(intraday) >= 35 else self._candles[symbol].get("daily", intraday)
 
     def prime_from_history(self) -> int:
-        """Create display-only initial analyses from delayed historical bars."""
+        """Create initial analyses from primed provider candles."""
         primed = 0
         for symbol in self.config.symbols:
-            candles = self._candles[symbol].get("daily", [])
+            candles = self._analysis_candles(symbol)
             if len(candles) < 35:
                 continue
             latest = candles[-1]
@@ -102,7 +102,7 @@ class SignalEngine:
                     price=latest.close,
                     timestamp=latest.timestamp,
                     total_volume=latest.volume,
-                    source="yfinance delayed history",
+                    source="historical primer",
                 ),
                 candles,
             )
@@ -259,7 +259,7 @@ class SignalEngine:
         if candle_patterns["bearish_engulfing"]:
             reasons.append("Ayı yutan mum")
         if rs is not None:
-            reasons.append(f"BIST 100'e göre güç: {rs:+.2f}%")
+            reasons.append(f"Benchmark'a göre güç: {rs:+.2f}%")
         return reasons
 
     def should_notify(self, signal: Signal) -> bool:

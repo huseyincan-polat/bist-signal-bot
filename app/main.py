@@ -1,16 +1,16 @@
-"""Application entry point for the analysis-only BIST 100 signal bot."""
+"""Application entry point for the analysis-only Futures signal bot."""
 
 from __future__ import annotations
 
 import asyncio
 import logging
 from contextlib import asynccontextmanager, suppress
+from dataclasses import replace
 
 import uvicorn
 
 from app.config import AppConfig, load_config
 from dashboard.app import DashboardState, create_dashboard
-from data.historical import fetch_yfinance_history
 from data.provider import DataProvider, create_provider
 from notifications.telegram import TelegramNotifier
 from strategy.signal_engine import SignalEngine
@@ -49,51 +49,52 @@ class SignalBotApplication:
                 with suppress(asyncio.CancelledError):
                     await self._task
 
-    def _seed_provider_history(self) -> None:
-        """Load available candles without inventing remote historical endpoints."""
-        symbols = list(self.config.symbols) + [self.config.index_symbol.split(":")[0]]
-        for symbol in symbols:
-            for timeframe in ("1m", "5m", "15m", "1h", "daily"):
-                candles = self.provider.historical_candles(symbol, timeframe)
-                if candles:
-                    self.engine.seed_history(symbol, timeframe, candles)
+    def _apply_universe(self) -> None:
+        """Use the provider's freshly ranked universe across app surfaces."""
+        symbols = self.provider.symbols
+        if not symbols:
+            return
+        self.config = replace(
+            self.config,
+            symbols=symbols,
+            index_symbol="BTCUSDT" if "BTCUSDT" in symbols else symbols[0],
+        )
+        self.engine.config = self.config
+        self.engine.index_symbol = self.config.index_symbol
+        self.dashboard.config = self.config
 
     async def _prime_history(self) -> None:
-        """Prime delayed daily bars before the batch scanner activates analysis."""
-        self._seed_provider_history()
+        """Prime Futures indicators from official REST klines in a worker thread."""
+        fetch_history = getattr(self.provider, "prime_history", None)
+        if fetch_history is None:
+            return
         try:
-            symbols = list(self.config.symbols) + [self.config.index_symbol.split(":")[0]]
-            history = await asyncio.wait_for(
-                asyncio.to_thread(fetch_yfinance_history, symbols),
-                timeout=45,
-            )
+            history = await asyncio.wait_for(fetch_history(), timeout=45)
         except (asyncio.TimeoutError, Exception):
-            logger.warning("Historical priming unavailable; waiting for provider history")
+            logger.warning("Futures historical priming unavailable")
             return
         for symbol, candles in history.items():
-            self.engine.seed_history(symbol, "daily", candles)
+            self.engine.seed_history(symbol, "1m", candles)
         self.primed_symbol_count = sum(
             1 for symbol in self.config.symbols if len(history.get(symbol, [])) >= 35
         )
         self.history_primed = self.primed_symbol_count > 0
-        logger.info("Historical primer completed: symbols=%s", self.primed_symbol_count)
+        logger.info("Futures historical primer completed: symbols=%s", self.primed_symbol_count)
 
     async def _consume(self) -> None:
         try:
             # Step 1: connection configuration/handshake begins before any engine work.
             await self.provider.connect()
+            self._apply_universe()
+            self._historical_task = asyncio.create_task(
+                self._prime_history(),
+                name="historical-primer",
+            )
             async for tick in self.provider.stream():
-                if self._historical_task is None:
-                    self._historical_task = asyncio.create_task(
-                        self._prime_history(),
-                        name="historical-primer",
-                    )
                 health = self.provider.health
                 self.dashboard.record_tick(tick)
                 # Steps 2–4 are satisfied only by accepted, current ticks for every symbol.
-                analysis_data_ready = health.ready_for_signals or (
-                    self.provider.allows_delayed_analysis and health.connected
-                )
+                analysis_data_ready = health.ready_for_signals
                 if self.history_primed and analysis_data_ready and not self._provider_ready:
                     primed_signals = self.engine.prime_from_history()
                     self.engine_started = True

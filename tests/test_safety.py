@@ -3,7 +3,7 @@ import asyncio
 import pytest
 
 from data.models import DataState, Signal, SignalState, utcnow
-from data.provider import DxFeedProvider, MockProvider
+from data.provider import MockProvider, create_provider
 from notifications.telegram import TelegramNotifier
 from tests.conftest import make_config
 
@@ -23,11 +23,9 @@ def test_mock_provider_is_never_realtime_or_signal_ready() -> None:
     assert not provider.health.ready_for_signals
 
 
-def test_dxfeed_refuses_to_start_without_entitlement_configuration() -> None:
-    provider = DxFeedProvider(make_config("dxfeed"))
-    with pytest.raises(RuntimeError):
-        asyncio.run(provider.connect())
-    assert provider.health.data_state is DataState.UNAVAILABLE
+def test_unknown_provider_is_rejected() -> None:
+    with pytest.raises(ValueError):
+        create_provider(make_config("unsupported"))
 
 
 def test_telegram_never_posts_when_realtime_gate_is_closed() -> None:

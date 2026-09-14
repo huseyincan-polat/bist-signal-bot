@@ -18,7 +18,7 @@ def test_score_bucket_boundaries() -> None:
 def test_signal_engine_calculates_multi_timeframe_signal() -> None:
     config = make_config()
     engine = SignalEngine(config, "test")
-    for symbol in ("AAA", "XU100"):
+    for symbol in ("AAA", "BTCUSDT"):
         for timeframe in ("1m", "5m", "15m", "1h", "daily"):
             engine.seed_history(symbol, timeframe, synthetic_candles(symbol, timeframe))
     signal = engine.on_tick(MarketTick("AAA", 100, datetime.now(UTC), tick_volume=1_000))

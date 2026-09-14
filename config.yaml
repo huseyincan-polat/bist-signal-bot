@@ -1,8 +1,7 @@
-# yfinance batch quotes are delayed by default and never unlock REAL_TIME on their own.
-data_provider: batch_yfinance
+# Binance USDⓈ-M Futures scanner. No order-routing capability exists.
+data_provider: binance_futures
 runtime:
-  stale_after_seconds: 45
-  startup_warmup_seconds: 8
+  stale_after_seconds: 10
   reconnect_backoff_seconds: 3
   signal_cooldown_minutes: 20
 dashboard:
@@ -10,17 +9,17 @@ dashboard:
   port: 8347
 telegram:
   enabled: false
-dxfeed:
-  # Set DXFEED_WS_URL from your dxFeed welcome letter. Do not use the demo
-  # endpoint for BIST signals: demo access can be delayed or lack BIST rights.
-  websocket_url_env: DXFEED_WS_URL
-  token_env: DXFEED_TOKEN
-  index_symbol: XU100:TR
-batch_yfinance:
-  # One concurrent batch request; no per-symbol request loop.
-  poll_seconds: 1
+binance_futures:
+  # Official USDⓈ-M endpoints documented by Binance.
+  rest_url: https://fapi.binance.com
+  websocket_url: wss://fstream.binance.com
+  universe_size: 50
+  historical_limit: 100
+universe:
+  # Populated at runtime from official 24-hour quote-volume tickers.
+  symbols: []
+  benchmark_symbol: BTCUSDT
 scoring:
-  bullish_regime_penalty: 0
   bearish_regime_penalty: 12
   buckets:
     strong_sell_max: 29
@@ -30,109 +29,3 @@ scoring:
 backtest:
   commission_bps: 10
   slippage_bps: 5
-bist100:
-  # Review against the exchange/provider entitlement list when constituents change.
-  symbol_names:
-    ALTINS1: Darphane Altın Sertifikası
-  symbols:
-    - ALTINS1
-    - AEFES
-    - AGHOL
-    - AGROT
-    - AKBNK
-    - AKCNS
-    - AKENR
-    - AKFGY
-    - AKFYE
-    - AKSA
-    - AKSEN
-    - ALARK
-    - ALBRK
-    - ALFAS
-    - ANSGR
-    - ARCLK
-    - ASELS
-    - ASTOR
-    - ATAKP
-    - AYDEM
-    - BAGFS
-    - BASGZ
-    - BIMAS
-    - BOBET
-    - BRSAN
-    - BRYAT
-    - BTCIM
-    - CANTE
-    - CCOLA
-    - CIMSA
-    - CLEBI
-    - CWENE
-    - DOAS
-    - DOHOL
-    - EFOR
-    - EGEEN
-    - EKGYO
-    - ENERY
-    - ENJSA
-    - ENKAI
-    - ERBOS
-    - EREGL
-    - EUPWR
-    - FROTO
-    - GARAN
-    - GESAN
-    - GOLTS
-    - GUBRF
-    - GWIND
-    - HALKB
-    - HEKTS
-    - ISCTR
-    - ISDMR
-    - ISGYO
-    - KARSN
-    - KCAER
-    - KCHOL
-    - KLSER
-    - KMPUR
-    - KONTR
-    - KORDS
-    - KOZAA
-    - KOZAL
-    - KRDMD
-    - MAVI
-    - MGROS
-    - MIATK
-    - MPARK
-    - OBASE
-    - ODAS
-    - OTKAR
-    - OYAKC
-    - PASEU
-    - PGSUS
-    - PETKM
-    - REEDR
-    - SAHOL
-    - SASA
-    - SDTTR
-    - SISE
-    - SKBNK
-    - SMRTG
-    - SOKM
-    - TABGD
-    - TAVHL
-    - TCELL
-    - THYAO
-    - TKFEN
-    - TMSN
-    - TOASO
-    - TSKB
-    - TTKOM
-    - TTRAK
-    - TUKAS
-    - TUPRS
-    - TURSG
-    - ULKER
-    - VAKBN
-    - VESTL
-    - YKBNK
-    - ZOREN

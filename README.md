@@ -1,17 +1,23 @@
-# BIST 100 Sinyal Merkezi
+# Binance Futures Sinyal Merkezi
 
-Borsa İstanbul 100 için teknik analiz, risk seviyeleri, çoklu zaman dilimi değerlendirmesi ve Telegram bildirimleri üreten Python uygulaması. Bu proje analiz ve kullanıcı sinyalleri içindir: **emir gönderme, broker entegrasyonu veya gerçek alım/satım API'si içermez.**
+Binance USDⓈ-M perpetual futures için teknik analiz ve fırsat tarayıcısı. Uygulama yalnızca analiz ve Telegram bildirimleri üretir; **emir iletimi, broker anahtarı veya işlem API'si içermez.**
 
-## Emniyet ilkesi
+## Veri mimarisi
 
-Sinyal motoru ve Telegram yalnızca aşağıdakiler başarıyla tamamlandıktan sonra açılır:
+- Evren, Binance'in resmî `/fapi/v1/exchangeInfo` ve `/fapi/v1/ticker/24hr` market-data uç noktalarından USDT perpetual sözleşmelerin 24 saatlik quote hacmine göre yenilenir.
+- En yüksek hacimli 50 sözleşmenin resmî `aggTrade` combined stream'i `wss://fstream.binance.com/stream?streams=...` üzerinden asenkron tüketilir.
+- Gösterge serileri, resmî `/fapi/v1/klines` ile geçmiş 1 dakikalık mumlardan iş parçacığında hazırlanır.
+- REST ve WebSocket sözleşmeleri için [Binance USDⓈ-M Futures dokümantasyonu](https://developers.binance.com/docs/derivatives/usds-margined-futures) esas alınır.
 
-1. Sağlayıcı bağlantısı kurulur.
-2. Akıştan veri geldiği doğrulanır.
-3. Her tick zaman damgasının güncel olduğu doğrulanır.
-4. `config.yaml` içindeki tüm BIST 100 sembolleri ve endeks verisi alındığı doğrulanır.
+Sinyal motoru, en az bir güncel WebSocket tick'i ve hazırlanmış geçmiş seri olmadan çalışmaz. Akış kesilir veya bayatlarsa panel `⚠️ REAL-TIME DATA NOT AVAILABLE` gösterir; Telegram bildirimleri kapalı kalır.
 
-Eksik, gecikmeli, mock veya bayat veri durumunda panel açıkça `⚠️ REAL-TIME DATA NOT AVAILABLE` gösterir ve Telegram'a sinyal gönderilmez.
+## Risk filtresi
+
+Fırsatlar teyitli swing high/low pivotları ve ATR ile hesaplanır:
+
+- Long/short teknik stop girişten en fazla %3 uzak olabilir.
+- Yapısal hedefte beklenen ödül/risk en az 1:3 olmalıdır.
+- Bu koşullardan biri sağlanmazsa sonuç `BEKLE` olur ve ana fırsat tablosunda görünmez.
 
 ## Çalıştırma
 
@@ -22,47 +28,9 @@ cp .env.example .env
 .venv/bin/python -m app.main
 ```
 
-Ardından `http://127.0.0.1:8347` adresini açın.
+Panel: `http://127.0.0.1:8347`
 
-Varsayılan `DATA_PROVIDER=mock` seçeneği yalnızca yerel kullanıcı arayüzü ve test içindir. Suni veri üretir, hiçbir zaman gerçek zamanlı olarak etiketlenmez ve sinyal motorunu/Telgram bildirimlerini açmaz.
-
-## dxFeed gerçek zamanlı sağlayıcısı
-
-Uygulanan lisanslı adaptör `dxfeed` (`dxLink`) seçeneğidir. Bu adaptör yalnızca dxFeed'in belgelenmiş dxLink WebSocket protokolünü kullanır:
-
-- [dxLink genel bakış ve yetkilendirme](https://kb.dxfeed.com/en/market-data-api/dxlink.html)
-- [dxLink AsyncAPI protokol tanımı](https://github.com/dxFeed/dxLink/blob/main/dxlink-specification/asyncapi.yml)
-- [Borsa İstanbul sembol biçimi](https://kb.dxfeed.com/en/data-model/symbology-guide/equities,-futures,-options,-and-spreads-symbology/turkish-formats.html)
-
-dxFeed karşılama mektubundaki WSS uç noktasını ve BIST gerçek-zamanlı yetkili token'ını `.env` içine yazın:
-
-```dotenv
-DATA_PROVIDER=dxfeed
-DXFEED_WS_URL=wss://<dxfeed-tarafindan-verilen-uc-nokta>
-DXFEED_TOKEN=<lisansli-token>
-TELEGRAM_BOT_TOKEN=<opsiyonel>
-TELEGRAM_CHAT_ID=<opsiyonel>
-```
-
-Demo uç noktası BIST gerçek zamanlı sinyalleri için kullanılmaz; demo/veri gecikmesi gerçek zamanlı sayılmaz. Anahtar ve BIST yetkisi olmadan canlı BIST akışı çalışmaz.
-
-`config.yaml` BIST 100 takip listesini içerir. Endeks bileşenleri değiştiğinde, bu listeyi sağlayıcının yetkili enstrüman profiline göre gözden geçirin.
-
-## Gecikmeli BIST 100 tarayıcısı
-
-`DATA_PROVIDER=batch_yfinance` seçildiğinde uygulama BIST 100 + ALTINS1 için tek bir paralel yfinance isteğiyle en son bir dakikalık barları tarar. İstek bir iş parçacığında çalışır; uygulama döngüsünü veya arayüzü engellemez. Günlük geçmiş mumları da yalnızca gösterge serilerini hazırlamak için önbelleklenir.
-
-yfinance verisi BIST için gecikmeli olabilir ve bu yüzden hiçbir zaman `REAL_TIME` olarak etiketlenmez. Panel `⚠️ REAL-TIME DATA NOT AVAILABLE` kilidini korur; Telegram bildirimi gönderilmez. Saniye seviyesinde doğrulanmış BIST verisi için lisanslı bir gerçek-zamanlı sağlayıcı (örneğin dxFeed) gerekir.
-
-## İçerik
-
-- `data/`: bağımsız `DataProvider` sözleşmesi, `MockProvider`, dxFeed dxLink, yfinance batch tarayıcısı, geçmiş-primer, tick doğrulama ve bağlantı sağlığı
-- `indicators/`: EMA/SMA/ADX/DI, RSI/MACD/Stochastic/Williams %R/CCI/ROC, ATR/Bollinger, VWAP/OBV/hacim ve fiyat-mum yapısı
-- `strategy/`: ağırlıklı 0–100 skor, BIST 100 piyasa rejimi ve göreli güç
-- `risk/`: teyitli swing + ATR stopu, %4 maksimum zarar filtresi ve en az 1:3 yapısal risk/ödül hedefleri
-- `notifications/`: gerçek-zamanlılık kapılı Telegram Bot API bildirimi
-- `dashboard/`: mobil uyumlu FastAPI paneli ve sembol bazlı WebSocket güncellemeleri
-- `backtest/`: aynı sinyal motoru ile komisyon/slippage destekli uzun yönlü simülasyon ve performans metrikleri
+Telegram isteğe bağlıdır. `TELEGRAM_BOT_TOKEN` ve `TELEGRAM_CHAT_ID` yalnızca `.env` veya barındırma platformunun gizli ortam değişkenleri aracılığıyla verilir.
 
 ## Testler
 
@@ -70,4 +38,4 @@ yfinance verisi BIST için gecikmeli olabilir ve bu yüzden hiçbir zaman `REAL_
 .venv/bin/python -m pytest -q
 ```
 
-Bu uygulama yatırım tavsiyesi değildir. Verilerin lisansını, BIST sembol setini ve kendi risk yönetiminizi doğrulayın.
+Yatırım tavsiyesi değildir. Kaldıraçlı futures işlemleri yüksek risk taşır.

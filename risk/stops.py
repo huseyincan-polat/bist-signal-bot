@@ -19,7 +19,7 @@ def structural_stop(
     swing_low: float | None,
     swing_high: float | None,
     bullish: bool,
-    max_stop_loss_pct: float = 0.04,
+    max_stop_loss_pct: float = 0.03,
 ) -> StructuralStop:
     """Use the deeper of a confirmed swing and an ATR stop; never use percent bands."""
     pivot = swing_low if bullish else swing_high
@@ -31,5 +31,5 @@ def structural_stop(
     if risk <= 0:
         return StructuralStop(None, None, False, "Teknik stop giriş yönünün dışında")
     if risk / entry > max_stop_loss_pct:
-        return StructuralStop(None, risk, False, "Teknik stop azami %4 zarar sınırını aşıyor")
+        return StructuralStop(None, risk, False, "Teknik stop azami %3 zarar sınırını aşıyor")
     return StructuralStop(round(technical_stop, 2), round(risk, 4), True)

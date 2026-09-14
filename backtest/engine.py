@@ -27,7 +27,7 @@ class BacktestEngine:
     def run(self, candles_by_symbol: dict[str, list[Candle]]) -> BacktestResult:
         index_symbol = self.config.index_symbol.split(":")[0]
         if index_symbol not in candles_by_symbol:
-            raise ValueError("BIST 100 index candles are required")
+            raise ValueError("Benchmark futures candles are required")
         engine = SignalEngine(self.config, "backtest")
         length = min(len(values) for values in candles_by_symbol.values())
         warmup = min(200, max(35, length // 3))

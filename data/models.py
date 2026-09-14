@@ -20,11 +20,11 @@ class DataState(str, Enum):
 
 
 class SignalState(str, Enum):
-    STRONG_SELL = "GÜÇLÜ SAT"
-    SELL = "SAT"
+    STRONG_SELL = "GÜÇLÜ SHORT"
+    SELL = "SHORT"
     WAIT = "BEKLE"
-    BUY = "AL"
-    STRONG_BUY = "GÜÇLÜ AL"
+    BUY = "LONG"
+    STRONG_BUY = "GÜÇLÜ LONG"
 
 
 @dataclass(frozen=True)

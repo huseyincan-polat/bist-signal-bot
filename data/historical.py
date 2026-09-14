@@ -1,24 +1,16 @@
-"""Historical-candle utilities and a deterministic local fallback."""
+"""Local fixture data and candle merging utilities."""
 
 from __future__ import annotations
 
 import math
 import random
 from datetime import UTC, datetime, timedelta
-from threading import Lock
-from typing import Any
 
 from data.models import Candle
-from data.models import MarketTick
-
-_YFINANCE_CACHE: dict[tuple[str, ...], tuple[datetime, dict[str, list[Candle]]]] = {}
-_YFINANCE_CACHE_LOCK = Lock()
-_YFINANCE_CACHE_TTL = timedelta(hours=6)
-_YFINANCE_REQUEST_LOCK = Lock()
 
 
 def synthetic_candles(symbol: str, timeframe: str, count: int = 240) -> list[Candle]:
-    """Generate repeatable local test data; it is intentionally never real-time."""
+    """Generate deterministic local fixtures; never represent this as live data."""
     seed = sum(ord(char) for char in f"{symbol}:{timeframe}")
     rng = random.Random(seed)
     interval = {"1m": 1, "5m": 5, "15m": 15, "1h": 60, "daily": 1440}[timeframe]
@@ -48,156 +40,7 @@ def synthetic_candles(symbol: str, timeframe: str, count: int = 240) -> list[Can
 
 
 def merge_candles(existing: list[Candle], backfill: list[Candle]) -> list[Candle]:
-    """Merge a reconnect backfill by its timestamp without duplicate candles."""
+    """Merge a reconnect backfill by timestamp without duplicate candles."""
     by_time = {candle.timestamp: candle for candle in existing}
     by_time.update({candle.timestamp: candle for candle in backfill})
     return sorted(by_time.values(), key=lambda candle: candle.timestamp)
-
-
-def yfinance_ticker(symbol: str) -> str:
-    """Map a Borsa Istanbul ticker to yfinance's documented `.IS` notation."""
-    return f"{symbol}.IS"
-
-
-def fetch_yfinance_history(
-    symbols: list[str],
-    *,
-    period: str = "6mo",
-    limit: int = 100,
-) -> dict[str, list[Candle]]:
-    """Batch-download delayed daily history for indicator priming only.
-
-    yfinance data is deliberately never reported through ``ProviderHealth`` and
-    therefore can never make dashboard data state REAL_TIME.
-    """
-    cache_key = tuple(symbols)
-    with _YFINANCE_CACHE_LOCK:
-        cached = _YFINANCE_CACHE.get(cache_key)
-        if cached and datetime.now(UTC) - cached[0] < _YFINANCE_CACHE_TTL:
-            return {symbol: list(candles) for symbol, candles in cached[1].items()}
-    try:
-        import yfinance as yf
-    except ImportError as error:
-        raise RuntimeError("yfinance must be installed for historical priming") from error
-
-    ticker_map = {symbol: yfinance_ticker(symbol) for symbol in symbols}
-    with _YFINANCE_REQUEST_LOCK:
-        raw = yf.download(
-            list(ticker_map.values()),
-            period=period,
-            interval="1d",
-            auto_adjust=False,
-            group_by="ticker",
-            progress=False,
-            threads=True,
-        )
-    result: dict[str, list[Candle]] = {}
-    for symbol, ticker in ticker_map.items():
-        frame = _ticker_frame(raw, ticker)
-        candles = _frame_to_candles(symbol, frame)
-        if candles:
-            result[symbol] = candles[-limit:]
-    with _YFINANCE_CACHE_LOCK:
-        _YFINANCE_CACHE[cache_key] = (datetime.now(UTC), result)
-    return result
-
-
-def fetch_yfinance_batch_quotes(symbols: list[str]) -> list[MarketTick]:
-    """Fetch the latest available one-minute bars in one delayed Yahoo batch.
-
-    The caller owns freshness classification. This helper is intentionally
-    synchronous so it can run entirely in a worker thread.
-    """
-    try:
-        import yfinance as yf
-    except ImportError as error:
-        raise RuntimeError("yfinance must be installed for batch quotes") from error
-
-    ticker_map = {symbol: yfinance_ticker(symbol) for symbol in symbols}
-    with _YFINANCE_REQUEST_LOCK:
-        raw = yf.download(
-            list(ticker_map.values()),
-            period="1d",
-            interval="1m",
-            auto_adjust=False,
-            group_by="ticker",
-            progress=False,
-            threads=True,
-        )
-    ticks: list[MarketTick] = []
-    for symbol, ticker in ticker_map.items():
-        frame = _ticker_frame(raw, ticker)
-        if frame is None or getattr(frame, "empty", True):
-            continue
-        try:
-            timestamp, row = next(reversed(list(frame.iterrows())))
-            values = {str(key).lower(): row[key] for key in row.index}
-            close = values.get("close")
-            volume = values.get("volume")
-            if not _is_number(close):
-                continue
-            timestamp = timestamp.to_pydatetime()
-            if timestamp.tzinfo is None:
-                timestamp = timestamp.replace(tzinfo=UTC)
-            else:
-                timestamp = timestamp.astimezone(UTC)
-            ticks.append(
-                MarketTick(
-                    symbol=symbol,
-                    price=float(close),
-                    timestamp=timestamp,
-                    total_volume=float(volume) if _is_number(volume) else None,
-                    source="yfinance delayed batch",
-                )
-            )
-        except (AttributeError, KeyError, StopIteration, TypeError, ValueError):
-            continue
-    return ticks
-
-
-def _ticker_frame(raw: Any, ticker: str) -> Any:
-    """Handle yfinance's grouped multi-ticker DataFrame without pandas APIs."""
-    columns = getattr(raw, "columns", None)
-    if columns is None:
-        return None
-    if getattr(columns, "nlevels", 1) > 1:
-        try:
-            return raw[ticker]
-        except KeyError:
-            return None
-    return raw
-
-
-def _frame_to_candles(symbol: str, frame: Any) -> list[Candle]:
-    if frame is None or getattr(frame, "empty", True):
-        return []
-    candles: list[Candle] = []
-    for timestamp, row in frame.iterrows():
-        try:
-            values = {str(key).lower(): row[key] for key in row.index}
-            if any(not _is_number(values.get(key)) for key in ("open", "high", "low", "close", "volume")):
-                continue
-            timestamp = timestamp.to_pydatetime()
-            if timestamp.tzinfo is None:
-                timestamp = timestamp.replace(tzinfo=UTC)
-            else:
-                timestamp = timestamp.astimezone(UTC)
-            candles.append(
-                Candle(
-                    symbol=symbol,
-                    timeframe="daily",
-                    timestamp=timestamp,
-                    open=float(values["open"]),
-                    high=float(values["high"]),
-                    low=float(values["low"]),
-                    close=float(values["close"]),
-                    volume=float(values["volume"]),
-                )
-            )
-        except (AttributeError, KeyError, TypeError, ValueError):
-            continue
-    return candles
-
-
-def _is_number(value: object) -> bool:
-    return isinstance(value, (int, float)) and not math.isnan(float(value))

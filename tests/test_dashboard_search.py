@@ -8,55 +8,42 @@ from strategy.signal_engine import SignalEngine
 from tests.conftest import make_config
 
 
-def test_dashboard_includes_symbol_and_display_name_search() -> None:
+def test_dashboard_defaults_to_actionable_long_short_view() -> None:
+    assert 'data-filter="ACTIVE">LONG / SHORT' in DASHBOARD_HTML
+    assert "filter='ACTIVE'" in DASHBOARD_HTML
+    assert "['LONG','GÜÇLÜ LONG','SHORT','GÜÇLÜ SHORT']" in DASHBOARD_HTML
+
+
+def test_dashboard_searches_contract_symbols() -> None:
     assert 'id="search"' in DASHBOARD_HTML
     assert "r.symbol} ${r.name}" in DASHBOARD_HTML
-    assert "priceCell(r)" in DASHBOARD_HTML
-    assert "filter='ACTIVE'" in DASHBOARD_HTML
-    assert "['AL','GÜÇLÜ AL','SAT','GÜÇLÜ SAT']" in DASHBOARD_HTML
 
 
-def test_primed_symbol_waiting_for_live_tick_is_not_labelled_stale() -> None:
-    config = replace(
-        make_config(),
-        symbols=("ALTINS1",),
-        symbol_names={"ALTINS1": "Darphane Altın Sertifikası"},
-    )
-    engine = SignalEngine(config, "yfinance delayed batch")
-    engine.seed_history("ALTINS1", "daily", synthetic_candles("ALTINS1", "daily", 100))
-    engine.prime_from_history()
-    health = ConnectionMonitor("yfinance delayed batch", {"ALTINS1"}, 45, partial_coverage_allowed=True).health
-    row = DashboardState(config, engine, health)._row("ALTINS1", None)
-    assert row["name"] == "Darphane Altın Sertifikası"
-    assert row["row_data_state"] == "PRIMED"
-    assert row["data_age"] is None
-
-
-def test_dashboard_calculates_cached_previous_close_price_change() -> None:
-    config = replace(make_config(), symbols=("THYAO",))
-    engine = SignalEngine(config, "yfinance delayed batch")
-    health = ConnectionMonitor("yfinance delayed batch", {"THYAO"}, 45).health
+def test_dashboard_calculates_previous_close_price_change() -> None:
+    config = replace(make_config(), symbols=("BTCUSDT",))
+    engine = SignalEngine(config, "Binance USDⓈ-M Futures")
+    health = ConnectionMonitor("Binance USDⓈ-M Futures", {"BTCUSDT"}, 45).health
     dashboard = DashboardState(config, engine, health)
     dashboard.record_tick(
         MarketTick(
-            symbol="THYAO",
-            price=73.10,
-            previous_close=72.02,
-            timestamp=synthetic_candles("THYAO", "daily", 1)[0].timestamp,
+            symbol="BTCUSDT",
+            price=73_100,
+            previous_close=72_020,
+            timestamp=synthetic_candles("BTCUSDT", "daily", 1)[0].timestamp,
         )
     )
-    row = dashboard._row("THYAO", None)
-    assert row["price_change"] == 1.08
+    row = dashboard._row("BTCUSDT", None)
+    assert row["price_change"] == 1080
     assert row["price_change_pct"] == 1.5
 
 
-def test_delayed_provider_rows_are_never_labelled_live() -> None:
-    config = replace(make_config(), symbols=("THYAO",))
-    engine = SignalEngine(config, "yfinance delayed batch")
-    monitor = ConnectionMonitor("yfinance delayed batch", {"THYAO"}, 45)
+def test_non_realtime_provider_rows_are_never_labelled_live() -> None:
+    config = replace(make_config(), symbols=("BTCUSDT",))
+    engine = SignalEngine(config, "delayed provider")
+    monitor = ConnectionMonitor("delayed provider", {"BTCUSDT"}, 45)
     monitor.mark_connected()
-    tick = MarketTick("THYAO", 100, synthetic_candles("THYAO", "daily", 1)[0].timestamp)
+    tick = MarketTick("BTCUSDT", 100, synthetic_candles("BTCUSDT", "daily", 1)[0].timestamp)
     monitor.record_tick(tick, real_time=False, data_state=DataState.STALE_DATA)
     dashboard = DashboardState(config, engine, monitor.health)
     dashboard.record_tick(tick)
-    assert dashboard._row("THYAO", None)["row_data_state"] == "STALE_DATA"
+    assert dashboard._row("BTCUSDT", None)["row_data_state"] == "STALE_DATA"

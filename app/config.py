@@ -26,15 +26,12 @@ class AppConfig:
     telegram_enabled: bool = False
     telegram_bot_token: str | None = None
     telegram_chat_id: str | None = None
-    dxfeed_websocket_url: str | None = None
-    dxfeed_token: str | None = None
-    batch_poll_seconds: float = 1.0
+    binance_rest_url: str = "https://fapi.binance.com"
+    binance_websocket_url: str = "wss://fstream.binance.com"
+    binance_universe_size: int = 50
+    binance_historical_limit: int = 100
     scoring: dict[str, Any] = field(default_factory=dict)
     backtest: dict[str, Any] = field(default_factory=dict)
-
-    @property
-    def is_dxfeed_configured(self) -> bool:
-        return bool(self.dxfeed_websocket_url and self.dxfeed_token)
 
 def _read_env(name: str, default: str | None = None) -> str | None:
     value = os.getenv(name, default)
@@ -57,14 +54,13 @@ def load_config(path: str | Path = "config.yaml") -> AppConfig:
     runtime = raw.get("runtime", {})
     dashboard = raw.get("dashboard", {})
     telegram = raw.get("telegram", {})
-    dxfeed = raw.get("dxfeed", {})
-    batch = raw.get("batch_yfinance", {})
+    binance = raw.get("binance_futures", {})
     provider_name = (_read_env("DATA_PROVIDER", raw.get("data_provider", "mock")) or "mock").lower()
     return AppConfig(
         provider_name=provider_name,
-        symbols=tuple(raw.get("bist100", {}).get("symbols", [])),
-        index_symbol=dxfeed.get("index_symbol", "XU100:TR"),
-        symbol_names=raw.get("bist100", {}).get("symbol_names", {}),
+        symbols=tuple(raw.get("universe", {}).get("symbols", [])),
+        index_symbol=raw.get("universe", {}).get("benchmark_symbol", "BTCUSDT"),
+        symbol_names=raw.get("universe", {}).get("symbol_names", {}),
         stale_after_seconds=int(runtime.get("stale_after_seconds", 45)),
         startup_warmup_seconds=int(runtime.get("startup_warmup_seconds", 8)),
         reconnect_backoff_seconds=int(runtime.get("reconnect_backoff_seconds", 3)),
@@ -74,9 +70,10 @@ def load_config(path: str | Path = "config.yaml") -> AppConfig:
         telegram_enabled=bool(telegram.get("enabled", False)),
         telegram_bot_token=_read_env("TELEGRAM_BOT_TOKEN"),
         telegram_chat_id=_read_env("TELEGRAM_CHAT_ID"),
-        dxfeed_websocket_url=_read_env(dxfeed.get("websocket_url_env", "DXFEED_WS_URL")),
-        dxfeed_token=_read_env(dxfeed.get("token_env", "DXFEED_TOKEN")),
-        batch_poll_seconds=float(batch.get("poll_seconds", 1)),
+        binance_rest_url=binance.get("rest_url", "https://fapi.binance.com"),
+        binance_websocket_url=binance.get("websocket_url", "wss://fstream.binance.com"),
+        binance_universe_size=int(binance.get("universe_size", 50)),
+        binance_historical_limit=int(binance.get("historical_limit", 100)),
         scoring=raw.get("scoring", {}),
         backtest=raw.get("backtest", {}),
     )
