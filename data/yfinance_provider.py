@@ -50,10 +50,7 @@ class YahooBatchProvider(HistoricalProvider):
         while True:
             started = asyncio.get_running_loop().time()
             try:
-                ticks = await asyncio.wait_for(
-                    asyncio.to_thread(self.fetch_batch, list(self.symbols)),
-                    timeout=30,
-                )
+                ticks = await asyncio.to_thread(self.fetch_batch, list(self.symbols))
                 self._monitor.mark_connected()
                 for tick in ticks:
                     if self._validator.validate(tick).accepted:

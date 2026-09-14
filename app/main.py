@@ -79,14 +79,15 @@ class SignalBotApplication:
         logger.info("Historical primer completed: symbols=%s", self.primed_symbol_count)
 
     async def _consume(self) -> None:
-        self._historical_task = asyncio.create_task(
-            self._prime_history(),
-            name="historical-primer",
-        )
         try:
             # Step 1: connection configuration/handshake begins before any engine work.
             await self.provider.connect()
             async for tick in self.provider.stream():
+                if self._historical_task is None:
+                    self._historical_task = asyncio.create_task(
+                        self._prime_history(),
+                        name="historical-primer",
+                    )
                 health = self.provider.health
                 self.dashboard.record_tick(tick)
                 # Steps 2–4 are satisfied only by accepted, current ticks for every symbol.

@@ -14,6 +14,7 @@ from data.models import MarketTick
 _YFINANCE_CACHE: dict[tuple[str, ...], tuple[datetime, dict[str, list[Candle]]]] = {}
 _YFINANCE_CACHE_LOCK = Lock()
 _YFINANCE_CACHE_TTL = timedelta(hours=6)
+_YFINANCE_REQUEST_LOCK = Lock()
 
 
 def synthetic_candles(symbol: str, timeframe: str, count: int = 240) -> list[Candle]:
@@ -80,15 +81,16 @@ def fetch_yfinance_history(
         raise RuntimeError("yfinance must be installed for historical priming") from error
 
     ticker_map = {symbol: yfinance_ticker(symbol) for symbol in symbols}
-    raw = yf.download(
-        list(ticker_map.values()),
-        period=period,
-        interval="1d",
-        auto_adjust=False,
-        group_by="ticker",
-        progress=False,
-        threads=True,
-    )
+    with _YFINANCE_REQUEST_LOCK:
+        raw = yf.download(
+            list(ticker_map.values()),
+            period=period,
+            interval="1d",
+            auto_adjust=False,
+            group_by="ticker",
+            progress=False,
+            threads=True,
+        )
     result: dict[str, list[Candle]] = {}
     for symbol, ticker in ticker_map.items():
         frame = _ticker_frame(raw, ticker)
@@ -112,15 +114,16 @@ def fetch_yfinance_batch_quotes(symbols: list[str]) -> list[MarketTick]:
         raise RuntimeError("yfinance must be installed for batch quotes") from error
 
     ticker_map = {symbol: yfinance_ticker(symbol) for symbol in symbols}
-    raw = yf.download(
-        list(ticker_map.values()),
-        period="1d",
-        interval="1m",
-        auto_adjust=False,
-        group_by="ticker",
-        progress=False,
-        threads=True,
-    )
+    with _YFINANCE_REQUEST_LOCK:
+        raw = yf.download(
+            list(ticker_map.values()),
+            period="1d",
+            interval="1m",
+            auto_adjust=False,
+            group_by="ticker",
+            progress=False,
+            threads=True,
+        )
     ticks: list[MarketTick] = []
     for symbol, ticker in ticker_map.items():
         frame = _ticker_frame(raw, ticker)
