@@ -178,7 +178,11 @@ class BinanceFuturesProvider(RealTimeProvider, HistoricalProvider):
                     self._monitor.mark_connected()
                     failures = 0
                     logger.info("Binance Futures WebSocket connected: aggTrade streams=%s", len(self.symbols))
-                    async for raw_message in socket:
+                    while True:
+                        raw_message = await asyncio.wait_for(
+                            socket.recv(),
+                            timeout=self.config.stale_after_seconds,
+                        )
                         tick = self.parse_message(raw_message)
                         if tick and self._validator.validate(tick).accepted:
                             self._monitor.record_tick(tick, real_time=True)
