@@ -5,8 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 from datetime import UTC, datetime
-from collections.abc import AsyncContextManager, Callable
-from typing import Any
+from typing import Any, AsyncContextManager, Callable
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
