@@ -27,6 +27,10 @@ from data.realtime import ConnectionMonitor, TickValidator
 logger = logging.getLogger(__name__)
 
 
+class RotationBoundary(Exception):
+    """Intentional reconnect after a free-tier subscription rotation."""
+
+
 class ITickRealTimeProvider(RealTimeProvider):
     """Rotates BIST 100 through small documented iTick WebSocket groups."""
 
@@ -127,6 +131,11 @@ class ITickRealTimeProvider(RealTimeProvider):
                             yield tick
                         self._next_group_index = (index + 1) % len(groups)
                         await self._unsubscribe_group(socket, index, symbols)
+                        raise RotationBoundary
+            except RotationBoundary:
+                # iTick's free endpoint closes after unsubscribe. Keep the last
+                # fresh state while immediately reconnecting to the next group.
+                continue
             except (OSError, websockets.WebSocketException, asyncio.TimeoutError, PermissionError, ConnectionError) as error:
                 self._monitor.mark_error("iTick stream unavailable")
                 consecutive_failures += 1
@@ -216,18 +225,9 @@ class ITickRealTimeProvider(RealTimeProvider):
         group_index: int,
         symbols: tuple[str, ...],
     ) -> None:
-        """Wait for the provider acknowledgement before subscribing the next group."""
+        """Send the documented unsubscribe frame before advancing the rotation."""
         await socket.send(json.dumps(self.unsubscribe_payload(symbols)))
-        deadline = asyncio.get_running_loop().time() + 5
-        while (remaining := deadline - asyncio.get_running_loop().time()) > 0:
-            message = await self._receive(socket, timeout=remaining)
-            if message.get("resAc") != "unsubscribe":
-                continue
-            if message.get("code") != 1:
-                raise ConnectionError("iTick unsubscribe was rejected")
-            logger.info("iTick rotation group=%s unsubscribed", group_index + 1)
-            return
-        raise ConnectionError("iTick unsubscribe was not acknowledged")
+        logger.info("iTick rotation group=%s unsubscribe sent", group_index + 1)
 
     async def _receive(self, socket: Any, timeout: float) -> dict[str, Any]:
         raw_message = await asyncio.wait_for(socket.recv(), timeout=timeout)

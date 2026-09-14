@@ -66,16 +66,13 @@ def test_itick_rotation_groups_limit_subscription_size_to_three() -> None:
     }
 
 
-def test_iTick_waits_for_unsubscribe_ack_before_next_group() -> None:
+def test_iTick_sends_documented_unsubscribe_before_next_group() -> None:
     class Socket:
         def __init__(self) -> None:
             self.sent: list[dict[str, object]] = []
 
         async def send(self, message: str) -> None:
             self.sent.append(json.loads(message))
-
-        async def recv(self) -> str:
-            return json.dumps({"code": 1, "resAc": "unsubscribe"})
 
     async def unsubscribe() -> Socket:
         socket = Socket()
