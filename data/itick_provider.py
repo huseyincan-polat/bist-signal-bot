@@ -13,7 +13,7 @@ import inspect
 import json
 import logging
 import time
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from typing import Any
 
@@ -28,23 +28,35 @@ logger = logging.getLogger(__name__)
 
 
 class ITickRealTimeProvider(RealTimeProvider):
-    """Streams the configured iTick Turkish-stock watchlist."""
+    """Rotates BIST 100 through small documented iTick WebSocket groups."""
 
     name = "iTick stock WebSocket"
-    INITIAL_POOL = ("THYAO", "EREGL", "KCHOL")
-    FALLBACK_POOL = ("THYAO", "EREGL")
+    SUBSCRIPTION_TYPES = ("quote", "tick", "depth")
 
     def __init__(self, config: AppConfig) -> None:
         self.config = config
         self.symbols = tuple(config.itick_symbols)
-        self._monitor = ConnectionMonitor(self.name, set(self.symbols), config.stale_after_seconds)
+        self.group_size = config.itick_group_size
+        self.group_listen_seconds = config.itick_group_listen_seconds
+        rotation_seconds = (
+            ((len(self.symbols) + self.group_size - 1) // self.group_size)
+            * self.group_listen_seconds
+            + 10
+        )
+        self._monitor = ConnectionMonitor(
+            self.name,
+            set(self.symbols),
+            config.stale_after_seconds,
+            partial_coverage_allowed=True,
+            rotation_stale_after_seconds=rotation_seconds,
+        )
         self._validator = TickValidator(config.stale_after_seconds)
         self._depth: dict[str, dict[str, float]] = {}
+        self.last_quotes: dict[str, MarketTick] = {}
         self._last_message_at: datetime | None = None
         self._first_live_tick_logged = False
-        self.accepted_ticker_format: str | None = None
-        self.accepted_symbols: tuple[str, ...] = ()
-        self.maximum_working_symbol_count = 0
+        self.successful_live_groups = 0
+        self.current_group_index = -1
 
     @property
     def health(self) -> ProviderHealth:
@@ -70,21 +82,27 @@ class ITickRealTimeProvider(RealTimeProvider):
             self._monitor.mark_error("iTick API key or active subscription list is not configured")
             raise RuntimeError("ITICK_API_KEY and iTick symbols are required")
 
-    def subscription_candidates(self) -> tuple[str, ...]:
-        """Try the configured documented pool, then its documented two-symbol subset."""
-        if self.symbols == self.INITIAL_POOL:
-            return tuple(
-                ",".join(f"{symbol}${self.config.itick_region}" for symbol in pool)
-                for pool in (self.INITIAL_POOL, self.FALLBACK_POOL)
-            )
-        return (",".join(f"{symbol}${self.config.itick_region}" for symbol in self.symbols),)
+    def rotation_groups(self) -> tuple[tuple[str, ...], ...]:
+        """Partition the BIST 100 universe without ever subscribing all at once."""
+        return tuple(
+            self.symbols[index:index + self.group_size]
+            for index in range(0, len(self.symbols), self.group_size)
+        )
 
-    def subscription_payload(self, codes: str | None = None) -> dict[str, str]:
-        """Published iTick payload: comma-separated SYMBOL$TR and quote/tick/depth."""
+    def subscription_payload(self, symbols: tuple[str, ...]) -> dict[str, str]:
+        """Published raw-WebSocket subscribe frame using comma-separated SYMBOL$TR."""
         return {
             "ac": "subscribe",
-            "params": codes or self.subscription_candidates()[0],
-            "types": "quote,tick,depth",
+            "params": ",".join(self._wire_symbol(symbol) for symbol in symbols),
+            "types": ",".join(self.SUBSCRIPTION_TYPES),
+        }
+
+    def unsubscribe_payload(self, symbols: tuple[str, ...]) -> dict[str, object]:
+        """Published SDK dynamic-unsubscribe frame for the active rotation group."""
+        return {
+            "ac": "unsubscribe",
+            "codes": [self._wire_symbol(symbol) for symbol in symbols],
+            "types": list(self.SUBSCRIPTION_TYPES),
         }
 
     async def stream(self) -> AsyncIterator[MarketTick]:
@@ -97,51 +115,13 @@ class ITickRealTimeProvider(RealTimeProvider):
                     self._monitor.mark_connected()
                     logger.info("iTick WebSocket connected; waiting for authentication")
                     heartbeat = asyncio.create_task(self._heartbeat(socket), name="itick-heartbeat")
-                    candidates = iter(self.subscription_candidates())
-                    pending_format: str | None = None
-                    async for raw_message in socket:
-                        self._last_message_at = datetime.now(UTC)
-                        message = self._decode(raw_message)
-                        if not message:
-                            continue
-                        if self._authentication_failed(message):
-                            raise PermissionError("iTick authentication failed")
-                        if self._authentication_succeeded(message):
-                            pending_format = await self._subscribe_next(socket, candidates)
-                            continue
-                        if self._subscription_failed(message):
-                            self._log_pool_result("rejected", pending_format, message.get("code"))
-                            pending_format = await self._subscribe_next(socket, candidates)
-                            continue
-                        if self._subscription_succeeded(message):
-                            self.accepted_ticker_format = pending_format
-                            self.accepted_symbols = self._local_symbols(pending_format)
-                            self.maximum_working_symbol_count = max(
-                                self.maximum_working_symbol_count, len(self.accepted_symbols)
-                            )
-                            self._monitor.health.expected_symbols = set(self.accepted_symbols)
-                            self._monitor.health.symbols_received.clear()
-                            self._log_pool_result("accepted", pending_format, message.get("code"))
-                            logger.info(
-                                "iTick maximum working subscription count=%s",
-                                self.maximum_working_symbol_count,
-                            )
-                            pending_format = None
-                            continue
-                        tick = self.parse_message(message)
-                        if tick and self._validator.validate(tick).accepted:
-                            self._monitor.record_tick(tick, real_time=True)
-                            consecutive_failures = 0
-                            if not self._first_live_tick_logged:
-                                logger.info(
-                                    "iTick live tick received: symbol=%s price=%s timestamp=%s",
-                                    tick.symbol,
-                                    tick.price,
-                                    tick.timestamp.isoformat(),
-                                )
-                                self._first_live_tick_logged = True
-                            yield tick
-                raise ConnectionError("iTick stream closed")
+                    await self._wait_for_authentication(socket)
+                    while True:
+                        for index, symbols in enumerate(self.rotation_groups()):
+                            self.current_group_index = index
+                            async for tick in self._stream_group(socket, index, symbols):
+                                consecutive_failures = 0
+                                yield tick
             except (OSError, websockets.WebSocketException, asyncio.TimeoutError, PermissionError, ConnectionError) as error:
                 self._monitor.mark_error("iTick stream unavailable")
                 consecutive_failures += 1
@@ -160,32 +140,78 @@ class ITickRealTimeProvider(RealTimeProvider):
                     with suppress(asyncio.CancelledError):
                         await heartbeat
 
-    async def _subscribe_next(self, socket: Any, candidates: Iterator[str]) -> str:
-        try:
-            ticker_format = next(candidates)
-        except StopIteration as error:
-            raise PermissionError("iTick rejected every configured subscription pool") from error
-        await socket.send(json.dumps(self.subscription_payload(ticker_format)))
-        logger.info("iTick subscription requested: symbols=%s", ticker_format)
-        return ticker_format
+    async def _wait_for_authentication(self, socket: Any) -> None:
+        while True:
+            message = await self._receive(socket, timeout=15)
+            if self._authentication_failed(message):
+                raise PermissionError("iTick authentication failed")
+            if self._authentication_succeeded(message):
+                return
 
-    @staticmethod
-    def _local_symbols(codes: str | None) -> tuple[str, ...]:
-        if not codes:
-            return ()
-        return tuple(code.split("$")[0].split(".")[0] for code in codes.split(","))
+    async def _stream_group(
+        self,
+        socket: Any,
+        group_index: int,
+        symbols: tuple[str, ...],
+    ) -> AsyncIterator[MarketTick]:
+        await socket.send(json.dumps(self.subscription_payload(symbols)))
+        logger.info(
+            "iTick rotation group=%s/%s subscribe symbols=%s",
+            group_index + 1,
+            len(self.rotation_groups()),
+            ",".join(self._wire_symbol(symbol) for symbol in symbols),
+        )
+        accepted = False
+        saved_ticks = 0
+        deadline = asyncio.get_running_loop().time() + self.group_listen_seconds
+        while (remaining := deadline - asyncio.get_running_loop().time()) > 0:
+            try:
+                message = await self._receive(socket, timeout=remaining)
+            except asyncio.TimeoutError:
+                break
+            if self._subscription_failed(message):
+                logger.warning(
+                    "iTick rotation group=%s rejected code=%s",
+                    group_index + 1,
+                    message.get("code"),
+                )
+                raise PermissionError("iTick rotation group subscription rejected")
+            if self._subscription_succeeded(message):
+                accepted = True
+                logger.info("iTick rotation group=%s accepted", group_index + 1)
+                continue
+            tick = self.parse_message(message)
+            if tick and self._validator.validate(tick).accepted:
+                self._monitor.record_tick(tick, real_time=True)
+                self.last_quotes[tick.symbol] = tick
+                saved_ticks += 1
+                if not self._first_live_tick_logged:
+                    logger.info(
+                        "iTick live tick received: symbol=%s price=%s timestamp=%s",
+                        tick.symbol,
+                        tick.price,
+                        tick.timestamp.isoformat(),
+                    )
+                    self._first_live_tick_logged = True
+                yield tick
+        if not accepted:
+            raise asyncio.TimeoutError("iTick group did not acknowledge subscription")
+        self.successful_live_groups += 1
+        logger.info(
+            "iTick rotation group=%s/%s complete ticks_saved=%s",
+            group_index + 1,
+            len(self.rotation_groups()),
+            saved_ticks,
+        )
+        await socket.send(json.dumps(self.unsubscribe_payload(symbols)))
 
-    def _log_pool_result(self, outcome: str, codes: str | None, response_code: object) -> None:
-        """iTick acknowledges a pool, not individual symbols; log each member accurately."""
-        pool = self._local_symbols(codes)
-        for symbol in pool:
-            logger.info(
-                "iTick subscription %s: symbol=%s pool_size=%s response_code=%s",
-                outcome,
-                symbol,
-                len(pool),
-                response_code,
-            )
+    async def _receive(self, socket: Any, timeout: float) -> dict[str, Any]:
+        raw_message = await asyncio.wait_for(socket.recv(), timeout=timeout)
+        self._last_message_at = datetime.now(UTC)
+        return self._decode(raw_message) or {}
+
+    def _wire_symbol(self, symbol: str) -> str:
+        return symbol if "$" in symbol else f"{symbol}${self.config.itick_region}"
 
     def _socket(self) -> Any:
         """Use the documented `token` WebSocket header without exposing it in logs."""

@@ -31,6 +31,8 @@ class AppConfig:
     itick_api_key: str | None = None
     itick_symbols: tuple[str, ...] = ()
     itick_region: str = "TR"
+    itick_group_size: int = 3
+    itick_group_listen_seconds: int = 3
     scoring: dict[str, Any] = field(default_factory=dict)
     backtest: dict[str, Any] = field(default_factory=dict)
 
@@ -90,8 +92,10 @@ def load_config(path: str | Path = "config.yaml") -> AppConfig:
             or "wss://api-free.itick.org/stock"
         ),
         itick_api_key=_read_env(itick.get("api_key_env", "ITICK_API_KEY")),
-        itick_symbols=tuple(itick.get("symbols", [])),
+        itick_symbols=tuple(itick.get("symbols", raw.get("bist100", {}).get("symbols", []))),
         itick_region=itick.get("region", "TR"),
+        itick_group_size=int(itick.get("group_size", 3)),
+        itick_group_listen_seconds=int(itick.get("group_listen_seconds", 3)),
         scoring=raw.get("scoring", {}),
         backtest=raw.get("backtest", {}),
     )

@@ -35,10 +35,20 @@ class TickValidator:
 
 
 class ConnectionMonitor:
-    def __init__(self, provider: str, symbols: set[str], stale_after_seconds: int) -> None:
+    def __init__(
+        self,
+        provider: str,
+        symbols: set[str],
+        stale_after_seconds: int,
+        *,
+        partial_coverage_allowed: bool = False,
+        rotation_stale_after_seconds: int | None = None,
+    ) -> None:
         self.health = ProviderHealth(
             provider=provider,
             expected_symbols=symbols,
+            partial_coverage_allowed=partial_coverage_allowed,
+            rotation_stale_after_seconds=rotation_stale_after_seconds,
         )
         self.stale_after_seconds = stale_after_seconds
 
@@ -54,6 +64,7 @@ class ConnectionMonitor:
 
     def record_tick(self, tick: MarketTick, real_time: bool) -> None:
         self.health.last_data_at = tick.timestamp
+        self.health.last_data_by_symbol[tick.symbol] = tick.timestamp
         self.health.symbols_received.add(tick.symbol)
         self.health.data_state = DataState.REAL_TIME if real_time else DataState.MOCK
 

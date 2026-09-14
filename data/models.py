@@ -72,8 +72,11 @@ class ProviderHealth:
     provider: str = "unknown"
     last_error: str | None = None
     last_data_at: datetime | None = None
+    last_data_by_symbol: dict[str, datetime] = field(default_factory=dict)
     symbols_received: set[str] = field(default_factory=set)
     expected_symbols: set[str] = field(default_factory=set)
+    partial_coverage_allowed: bool = False
+    rotation_stale_after_seconds: int | None = None
 
     @property
     def missing_symbols(self) -> set[str]:
@@ -84,8 +87,16 @@ class ProviderHealth:
         return (
             self.connected
             and self.data_state is DataState.REAL_TIME
-            and not self.missing_symbols
+            and (self.partial_coverage_allowed or not self.missing_symbols)
         )
+
+    def symbol_is_stale(self, symbol: str, now: datetime | None = None) -> bool:
+        last_data = self.last_data_by_symbol.get(symbol)
+        if last_data is None:
+            return True
+        if self.rotation_stale_after_seconds is None:
+            return False
+        return ((now or utcnow()) - last_data).total_seconds() > self.rotation_stale_after_seconds
 
 
 @dataclass

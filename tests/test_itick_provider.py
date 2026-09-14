@@ -1,5 +1,3 @@
-import asyncio
-import json
 from datetime import UTC, datetime
 
 from app.config import AppConfig, load_config
@@ -20,47 +18,50 @@ def make_itick_provider() -> ITickRealTimeProvider:
 
 def test_itick_subscription_uses_documented_turkish_symbol_format() -> None:
     provider = make_itick_provider()
-    assert provider.subscription_payload() == {
+    assert provider.subscription_payload(provider.rotation_groups()[0]) == {
         "ac": "subscribe",
         "params": "THYAO$TR,EREGL$TR,KCHOL$TR",
         "types": "quote,tick,depth",
     }
 
 
-def test_itick_uses_the_three_symbol_pool() -> None:
+def test_itick_uses_the_full_bist100_universe_from_config() -> None:
     config = load_config("config.yaml")
-    assert config.itick_symbols == ("THYAO", "EREGL", "KCHOL")
-    assert set(config.itick_symbols) < set(config.symbols)
+    assert config.itick_symbols == config.symbols
+    assert len(config.itick_symbols) == 100
 
 
-def test_itick_retries_the_documented_two_symbol_subset() -> None:
-    assert make_itick_provider().subscription_candidates() == (
-        "THYAO$TR,EREGL$TR,KCHOL$TR",
-        "THYAO$TR,EREGL$TR",
+def test_itick_rotation_groups_limit_subscription_size_to_three() -> None:
+    provider = ITickRealTimeProvider(
+        AppConfig(
+            provider_name="itick",
+            symbols=tuple(f"SYM{index}" for index in range(7)),
+            index_symbol="XU100:TR",
+            itick_api_key="test-key",
+            itick_symbols=tuple(f"SYM{index}" for index in range(7)),
+            itick_group_size=3,
+        )
     )
+    assert provider.rotation_groups() == (
+        ("SYM0", "SYM1", "SYM2"),
+        ("SYM3", "SYM4", "SYM5"),
+        ("SYM6",),
+    )
+    assert provider.unsubscribe_payload(("SYM0", "SYM1", "SYM2")) == {
+        "ac": "unsubscribe",
+        "codes": ["SYM0$TR", "SYM1$TR", "SYM2$TR"],
+        "types": ["quote", "tick", "depth"],
+    }
 
 
-def test_itick_sends_next_ticker_format_after_rejection() -> None:
-    class RecordingSocket:
-        def __init__(self) -> None:
-            self.messages: list[dict[str, str]] = []
-
-        async def send(self, message: str) -> None:
-            self.messages.append(json.loads(message))
-
-    async def subscribe_twice() -> RecordingSocket:
-        provider = make_itick_provider()
-        socket = RecordingSocket()
-        candidates = iter(provider.subscription_candidates())
-        assert await provider._subscribe_next(socket, candidates) == "THYAO$TR,EREGL$TR,KCHOL$TR"
-        assert await provider._subscribe_next(socket, candidates) == "THYAO$TR,EREGL$TR"
-        return socket
-
-    socket = asyncio.run(subscribe_twice())
-    assert [message["params"] for message in socket.messages] == [
-        "THYAO$TR,EREGL$TR,KCHOL$TR",
-        "THYAO$TR,EREGL$TR",
-    ]
+def test_itick_keeps_each_group_quote_in_memory() -> None:
+    provider = make_itick_provider()
+    tick = provider.parse_message(
+        {"code": 1, "data": {"s": "THYAO", "r": "TR", "ld": 250, "v": 10, "t": 1_731_689_407_000, "type": "tick"}}
+    )
+    assert tick is not None
+    provider.last_quotes[tick.symbol] = tick
+    assert provider.last_quotes["THYAO"].price == 250
 
 
 def test_itick_parse_maps_published_depth_and_tick_fields() -> None:

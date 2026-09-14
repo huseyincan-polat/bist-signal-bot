@@ -45,6 +45,64 @@ class SignalEngine:
             history.append(Candle(tick.symbol, "1m", minute, tick.price, tick.price, tick.price, tick.price, tick.tick_volume or 0))
         self._candles[tick.symbol]["1m"] = history[-600:]
 
+    def _update_daily_candle(self, tick: MarketTick) -> None:
+        """Apply a live last price to the primed daily series incrementally."""
+        history = self._candles[tick.symbol].get("daily")
+        if not history:
+            return
+        current_day = tick.timestamp.date()
+        previous = history[-1]
+        if previous.timestamp.date() == current_day:
+            history[-1] = Candle(
+                symbol=tick.symbol,
+                timeframe="daily",
+                timestamp=previous.timestamp,
+                open=previous.open,
+                high=max(previous.high, tick.price),
+                low=min(previous.low, tick.price),
+                close=tick.price,
+                volume=max(previous.volume, tick.total_volume or previous.volume),
+            )
+        else:
+            history.append(
+                Candle(
+                    symbol=tick.symbol,
+                    timeframe="daily",
+                    timestamp=tick.timestamp.replace(hour=0, minute=0, second=0, microsecond=0),
+                    open=previous.close,
+                    high=tick.price,
+                    low=tick.price,
+                    close=tick.price,
+                    volume=tick.total_volume or tick.tick_volume or 0,
+                )
+            )
+        self._candles[tick.symbol]["daily"] = history[-600:]
+
+    def _analysis_candles(self, symbol: str) -> list[Candle]:
+        intraday = self._candles[symbol].get("1m", [])
+        return intraday if len(intraday) >= 35 else self._candles[symbol].get("daily", intraday)
+
+    def prime_from_history(self) -> int:
+        """Create display-only initial analyses from delayed historical bars."""
+        primed = 0
+        for symbol in self.config.symbols:
+            candles = self._candles[symbol].get("daily", [])
+            if len(candles) < 35:
+                continue
+            latest = candles[-1]
+            self.signals[symbol] = self._build_signal(
+                MarketTick(
+                    symbol=symbol,
+                    price=latest.close,
+                    timestamp=latest.timestamp,
+                    total_volume=latest.volume,
+                    source="yfinance delayed history",
+                ),
+                candles,
+            )
+            primed += 1
+        return primed
+
     def _timeframe_candles(self, symbol: str, timeframe: str) -> list[Candle]:
         direct = self._candles[symbol].get(timeframe)
         if direct:
@@ -73,16 +131,17 @@ class SignalEngine:
     def on_tick(self, tick: MarketTick) -> Signal | None:
         """Incrementally update only the affected symbol then recalculate it."""
         self._update_current_candle(tick)
+        self._update_daily_candle(tick)
         if tick.symbol == self.index_symbol:
             self.market_regime = classify_market_regime(self._timeframe_candles(tick.symbol, "daily"))
             return None
         if tick.symbol not in self.config.symbols:
             return None
-        one_minute = self._timeframe_candles(tick.symbol, "1m")
-        if len(one_minute) < 35:
+        analysis_candles = self._analysis_candles(tick.symbol)
+        if len(analysis_candles) < 35:
             return None
         previous = self.signals.get(tick.symbol)
-        signal = self._build_signal(tick, one_minute)
+        signal = self._build_signal(tick, analysis_candles)
         self._pending_previous[tick.symbol] = previous.state if previous else None
         self.signals[tick.symbol] = signal
         return signal
@@ -94,7 +153,7 @@ class SignalEngine:
         volatility_values = volatility.calculate(candles)
         structure = price_action.calculate(candles)
         candle_patterns = patterns.calculate(candles)
-        index_candles = self._timeframe_candles(self.index_symbol, "1m")
+        index_candles = self._analysis_candles(self.index_symbol)
         rs = relative_strength(candles, index_candles)
         mtf_trends = [
             self._trend_score(trend.calculate(self._timeframe_candles(tick.symbol, timeframe)).get("trend"))
@@ -138,6 +197,7 @@ class SignalEngine:
             "daily": self._timeframe_label(tick.symbol, "daily"),
             "relative_strength": rs,
             "market_regime": self.market_regime,
+            "data_quality": "LIVE" if tick.source == self.provider_name else "DELAYED_HISTORICAL",
         }
         return Signal(
             symbol=tick.symbol,

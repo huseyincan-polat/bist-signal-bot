@@ -44,6 +44,8 @@ class DashboardState:
             "last_error": self.health.last_error,
             "symbols_received": len(self.health.symbols_received),
             "symbols_expected": len(self.health.expected_symbols),
+            "rotation_stale_after_seconds": self.health.rotation_stale_after_seconds,
+            "primed_signals": len(self.engine.signals),
             "data_age": data_age,
             "market_regime": self.engine.market_regime,
             "rows": rows,
@@ -54,6 +56,13 @@ class DashboardState:
 
     def _row(self, symbol: str, global_age: float | None) -> dict[str, Any]:
         signal = self.engine.signals.get(symbol)
+        live_at = self.health.last_data_by_symbol.get(symbol)
+        live_age = round((datetime.now(UTC) - live_at).total_seconds(), 1) if live_at else None
+        row_data_state = (
+            "STALE_DATA"
+            if self.health.symbol_is_stale(symbol)
+            else "REAL_TIME"
+        )
         if not signal:
             tick = self.last_ticks.get(symbol)
             return {
@@ -61,7 +70,9 @@ class DashboardState:
                 "signal": "DOĞRULANMADI" if tick else "YÜKLENİYOR",
                 "score": None, "rsi": None, "macd": None, "adx": None, "relative_volume": None,
                 "trend": "—", "15m": "—", "1h": "—", "daily": "—", "stop": None,
-                "target": None, "data_age": global_age,
+                "target": None,
+                "data_age": live_age if live_age is not None else global_age,
+                "row_data_state": row_data_state,
             }
         metric = signal.metrics
         return {
@@ -70,7 +81,11 @@ class DashboardState:
             "macd": metric.get("macd"), "adx": metric.get("adx"),
             "relative_volume": metric.get("relative_volume"), "trend": metric.get("trend"),
             "15m": metric.get("15m"), "1h": metric.get("1h"), "daily": metric.get("daily"),
-            "stop": signal.stop, "target": signal.targets[0], "data_age": round((datetime.now(UTC) - signal.data_timestamp).total_seconds(), 1),
+            "stop": signal.stop,
+            "target": signal.targets[0],
+            "data_age": live_age if live_age is not None else round((datetime.now(UTC) - signal.data_timestamp).total_seconds(), 1),
+            "row_data_state": row_data_state,
+            "data_quality": metric.get("data_quality"),
         }
 
     async def publish(self, symbol: str) -> None:
@@ -78,6 +93,19 @@ class DashboardState:
             return
         row = next(item for item in self.state()["rows"] if item["symbol"] == symbol)
         payload = json.dumps({"type": "symbol_update", "row": row, "status": self.state()})
+        stale: list[WebSocket] = []
+        for connection in self.connections:
+            try:
+                await connection.send_text(payload)
+            except Exception:
+                stale.append(connection)
+        for connection in stale:
+            self.connections.discard(connection)
+
+    async def broadcast_state(self) -> None:
+        if not self.connections:
+            return
+        payload = json.dumps({"type": "state_update", "status": self.state()})
         stale: list[WebSocket] = []
         for connection in self.connections:
             try:
@@ -135,6 +163,6 @@ DASHBOARD_HTML = r"""<!doctype html>
 </main><script>
 let rows=[],filter='ALL',currentStatus={};const f=n=>n==null?'—':Number(n).toLocaleString('tr-TR',{maximumFractionDigits:2});const esc=s=>String(s??'—').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 function cls(signal){return signal.includes('AL')?'buy':signal.includes('SAT')?'sell':'wait'}function leader(row){return `<span class="leader ${cls(row.signal)}">${esc(row.symbol)} · ${esc(row.signal)} ${f(row.score)}</span>`}
-function render(status){currentStatus=status;rows=status.rows||rows;document.querySelector('#provider').textContent=status.provider;document.querySelector('#connection').textContent=status.connected?'BAĞLI':'BAĞLANTI YOK';document.querySelector('#regime').textContent=status.market_regime;document.querySelector('#coverage').textContent=`${status.symbols_received}/${status.symbols_expected}`;document.querySelector('#age').textContent=status.data_age==null?'—':`${status.data_age} sn`;document.querySelector('#engine').textContent=status.ready_for_signals?'AKTİF':'EMNİYET KİLİDİ';document.querySelector('#warning').classList.toggle('hide',status.data_state==='REAL_TIME'&&status.ready_for_signals);document.querySelector('#buys').innerHTML=status.top_buys.length?status.top_buys.map(leader).join(''):'<span class="muted">Uygun AL sinyali yok.</span>';document.querySelector('#sells').innerHTML=status.top_sells.length?status.top_sells.map(leader).join(''):'<span class="muted">Uygun SAT sinyali yok.</span>';let visible=filter==='ALL'?rows:rows.filter(r=>r.signal===filter);document.querySelector('#rows').innerHTML=visible.length?visible.map(r=>`<tr><td><b>${esc(r.symbol)}</b></td><td>${f(r.price)}</td><td>${f(r.change)}</td><td class="signal ${cls(r.signal)}">${esc(r.signal)}</td><td>${f(r.score)}</td><td>${f(r.rsi)}</td><td>${f(r.macd)}</td><td>${f(r.adx)}</td><td>${f(r.relative_volume)}x</td><td>${esc(r.trend)}</td><td>${esc(r['15m'])}</td><td>${esc(r['1h'])}</td><td>${esc(r.daily)}</td><td>${f(r.stop)}</td><td>${f(r.target)}</td><td>${r.data_age==null?'—':f(r.data_age)+' sn'}</td></tr>`).join(''):'<tr><td colspan="16" class="empty">Bu filtre için sinyal yok.</td></tr>'}
+function render(status){currentStatus=status;rows=status.rows||rows;document.querySelector('#provider').textContent=status.provider;document.querySelector('#connection').textContent=status.connected?'BAĞLI':'BAĞLANTI YOK';document.querySelector('#regime').textContent=status.market_regime;document.querySelector('#coverage').textContent=`${status.symbols_received}/${status.symbols_expected}`;document.querySelector('#age').textContent=status.data_age==null?'—':`${status.data_age} sn`;document.querySelector('#engine').textContent=status.ready_for_signals?'AKTİF':'EMNİYET KİLİDİ';document.querySelector('#warning').classList.toggle('hide',status.data_state==='REAL_TIME'&&status.ready_for_signals);document.querySelector('#buys').innerHTML=status.top_buys.length?status.top_buys.map(leader).join(''):'<span class="muted">Uygun AL sinyali yok.</span>';document.querySelector('#sells').innerHTML=status.top_sells.length?status.top_sells.map(leader).join(''):'<span class="muted">Uygun SAT sinyali yok.</span>';let visible=filter==='ALL'?rows:rows.filter(r=>r.signal===filter);document.querySelector('#rows').innerHTML=visible.length?visible.map(r=>`<tr><td><b>${esc(r.symbol)}</b></td><td>${f(r.price)}</td><td>${f(r.change)}</td><td class="signal ${cls(r.signal)}">${esc(r.signal)}</td><td>${f(r.score)}</td><td>${f(r.rsi)}</td><td>${f(r.macd)}</td><td>${f(r.adx)}</td><td>${f(r.relative_volume)}x</td><td>${esc(r.trend)}</td><td>${esc(r['15m'])}</td><td>${esc(r['1h'])}</td><td>${esc(r.daily)}</td><td>${f(r.stop)}</td><td>${f(r.target)}</td><td>${r.data_age==null?'—':f(r.data_age)+' sn'+(r.row_data_state==='STALE_DATA'?' · BAYAT':'')}</td></tr>`).join(''):'<tr><td colspan="16" class="empty">Bu filtre için sinyal yok.</td></tr>'}
 document.querySelector('#filters').onclick=e=>{if(!e.target.dataset.filter)return;filter=e.target.dataset.filter;document.querySelectorAll('button').forEach(b=>b.classList.toggle('active',b.dataset.filter===filter));render(currentStatus)};fetch('/api/state').then(r=>r.json()).then(render);let ws=new WebSocket(`${location.protocol==='https:'?'wss':'ws'}://${location.host}/ws`);ws.onmessage=e=>{let p=JSON.parse(e.data);if(p.status)render(p.status)};ws.onclose=()=>setTimeout(()=>location.reload(),3000);
 </script></body></html>"""
