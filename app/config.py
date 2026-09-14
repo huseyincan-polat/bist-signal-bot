@@ -48,6 +48,13 @@ def _read_env(name: str, default: str | None = None) -> str | None:
     return value.strip() if value else None
 
 
+def _read_port(default: int) -> int:
+    value = _read_env("PORT", str(default))
+    if value is None or not value.isdigit():
+        return default
+    return int(value)
+
+
 def load_config(path: str | Path = "config.yaml") -> AppConfig:
     """Load non-secret YAML settings and resolve secrets from `.env` only."""
     load_dotenv()
@@ -69,7 +76,7 @@ def load_config(path: str | Path = "config.yaml") -> AppConfig:
         reconnect_backoff_seconds=int(runtime.get("reconnect_backoff_seconds", 3)),
         signal_cooldown_minutes=int(runtime.get("signal_cooldown_minutes", 20)),
         dashboard_host=dashboard.get("host", "0.0.0.0"),
-        dashboard_port=int(dashboard.get("port", 8347)),
+        dashboard_port=_read_port(int(dashboard.get("port", 8347))),
         telegram_enabled=bool(telegram.get("enabled", False)),
         telegram_bot_token=_read_env("TELEGRAM_BOT_TOKEN"),
         telegram_chat_id=_read_env("TELEGRAM_CHAT_ID"),
