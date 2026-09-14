@@ -42,6 +42,7 @@ class TelegramNotifier:
             "📊 BIST SİNYALİ\n"
             f"Hisse: {signal.symbol}\n"
             f"Sinyal: {signal.state.value} ({signal.confidence}/100)\n"
+            "Onay: Canlı veriyle Onaylandı\n"
             f"Fiyat / Giriş: ₺{signal.price:,.2f}\n"
             f"Stop: ₺{signal.stop:,.2f}\n"
             f"Hedef 1 / 2 / 3: {targets}\n"

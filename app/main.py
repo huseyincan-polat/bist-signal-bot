@@ -32,6 +32,7 @@ class SignalBotApplication:
         self._provider_ready = False
         self.history_primed = False
         self.primed_symbol_count = 0
+        self._historical_task: asyncio.Task[None] | None = None
         self._task: asyncio.Task[None] | None = None
         self.api, self.dashboard = create_dashboard(
             config, self.engine, self.provider.health, lifespan=self._lifespan
@@ -62,8 +63,11 @@ class SignalBotApplication:
         self._seed_provider_history()
         try:
             symbols = list(self.config.symbols) + [self.config.index_symbol.split(":")[0]]
-            history = await asyncio.to_thread(fetch_yfinance_history, symbols)
-        except Exception:
+            history = await asyncio.wait_for(
+                asyncio.to_thread(fetch_yfinance_history, symbols),
+                timeout=45,
+            )
+        except (asyncio.TimeoutError, Exception):
             logger.warning("Historical priming unavailable; waiting for provider history")
             return
         for symbol, candles in history.items():
@@ -75,8 +79,11 @@ class SignalBotApplication:
         logger.info("Historical primer completed: symbols=%s", self.primed_symbol_count)
 
     async def _consume(self) -> None:
+        self._historical_task = asyncio.create_task(
+            self._prime_history(),
+            name="historical-primer",
+        )
         try:
-            await self._prime_history()
             # Step 1: connection configuration/handshake begins before any engine work.
             await self.provider.connect()
             async for tick in self.provider.stream():
@@ -111,6 +118,11 @@ class SignalBotApplication:
         except Exception:
             # Do not include transport errors: a misconfigured URL could contain a secret.
             logger.warning("Market-data startup verification failed")
+        finally:
+            if self._historical_task and not self._historical_task.done():
+                self._historical_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await self._historical_task
 
 
 def build_application(config_path: str = "config.yaml") -> SignalBotApplication:

@@ -5,9 +5,14 @@ from __future__ import annotations
 import math
 import random
 from datetime import UTC, datetime, timedelta
+from threading import Lock
 from typing import Any
 
 from data.models import Candle
+
+_YFINANCE_CACHE: dict[tuple[str, ...], tuple[datetime, dict[str, list[Candle]]]] = {}
+_YFINANCE_CACHE_LOCK = Lock()
+_YFINANCE_CACHE_TTL = timedelta(hours=6)
 
 
 def synthetic_candles(symbol: str, timeframe: str, count: int = 240) -> list[Candle]:
@@ -63,6 +68,11 @@ def fetch_yfinance_history(
     yfinance data is deliberately never reported through ``ProviderHealth`` and
     therefore can never make dashboard data state REAL_TIME.
     """
+    cache_key = tuple(symbols)
+    with _YFINANCE_CACHE_LOCK:
+        cached = _YFINANCE_CACHE.get(cache_key)
+        if cached and datetime.now(UTC) - cached[0] < _YFINANCE_CACHE_TTL:
+            return {symbol: list(candles) for symbol, candles in cached[1].items()}
     try:
         import yfinance as yf
     except ImportError as error:
@@ -84,6 +94,8 @@ def fetch_yfinance_history(
         candles = _frame_to_candles(symbol, frame)
         if candles:
             result[symbol] = candles[-limit:]
+    with _YFINANCE_CACHE_LOCK:
+        _YFINANCE_CACHE[cache_key] = (datetime.now(UTC), result)
     return result
 
 

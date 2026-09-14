@@ -40,7 +40,10 @@ backtest:
   slippage_bps: 5
 bist100:
   # Review against the exchange/provider entitlement list when constituents change.
+  symbol_names:
+    ALTINS1: Darphane Altın Sertifikası
   symbols:
+    - ALTINS1
     - AEFES
     - AGHOL
     - AGROT

@@ -16,6 +16,7 @@ class AppConfig:
     provider_name: str
     symbols: tuple[str, ...]
     index_symbol: str
+    symbol_names: dict[str, str] = field(default_factory=dict)
     stale_after_seconds: int = 45
     startup_warmup_seconds: int = 8
     reconnect_backoff_seconds: int = 3
@@ -73,6 +74,7 @@ def load_config(path: str | Path = "config.yaml") -> AppConfig:
         provider_name=provider_name,
         symbols=tuple(raw.get("bist100", {}).get("symbols", [])),
         index_symbol=dxfeed.get("index_symbol", "XU100:TR"),
+        symbol_names=raw.get("bist100", {}).get("symbol_names", {}),
         stale_after_seconds=int(runtime.get("stale_after_seconds", 45)),
         startup_warmup_seconds=int(runtime.get("startup_warmup_seconds", 8)),
         reconnect_backoff_seconds=int(runtime.get("reconnect_backoff_seconds", 3)),

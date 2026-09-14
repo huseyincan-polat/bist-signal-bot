@@ -28,7 +28,17 @@ def test_itick_subscription_uses_documented_turkish_symbol_format() -> None:
 def test_itick_uses_the_full_bist100_universe_from_config() -> None:
     config = load_config("config.yaml")
     assert config.itick_symbols == config.symbols
-    assert len(config.itick_symbols) == 100
+    assert len(config.itick_symbols) == 101
+    assert config.itick_symbols[0] == "ALTINS1"
+
+
+def test_altins1_starts_the_first_iTick_rotation_group() -> None:
+    config = load_config("config.yaml")
+    provider = ITickRealTimeProvider(config)
+    assert provider.rotation_groups()[0] == ("ALTINS1", "AEFES", "AGHOL")
+    assert provider.subscription_payload(provider.rotation_groups()[0])["params"] == (
+        "ALTINS1$TR,AEFES$TR,AGHOL$TR"
+    )
 
 
 def test_itick_rotation_groups_limit_subscription_size_to_three() -> None:
