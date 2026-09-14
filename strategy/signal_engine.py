@@ -6,6 +6,7 @@ from collections import defaultdict
 from datetime import UTC, datetime, timedelta
 
 from app.config import AppConfig
+from data.kline_buffer import KlineBufferStore, MIN_BARS_FOR_SIGNALS
 from data.models import Candle, MarketTick, Signal, SignalState
 from indicators import momentum, patterns, price_action, trend, volatility, volume
 from risk.targets import structure_risk_plan
@@ -27,6 +28,10 @@ class SignalEngine:
         self._pending_previous: dict[str, SignalState | None] = {}
         self.index_symbol = config.index_symbol.split(":")[0]
         self.market_regime = "NEUTRAL"
+        self._kline_store: KlineBufferStore | None = None
+
+    def bind_kline_store(self, store: KlineBufferStore) -> None:
+        self._kline_store = store
 
     def seed_history(self, symbol: str, timeframe: str, candles: list[Candle]) -> None:
         history = list(candles)[-600:]
@@ -85,8 +90,12 @@ class SignalEngine:
         self._candles[tick.symbol]["daily"] = history[-600:]
 
     def _analysis_candles(self, symbol: str) -> list[Candle]:
+        if self._kline_store:
+            ws_candles = self._kline_store.candles(symbol, "1m")
+            if len(ws_candles) >= MIN_BARS_FOR_SIGNALS:
+                return ws_candles
         intraday = self._candles[symbol].get("1m", [])
-        return intraday if len(intraday) >= 35 else self._candles[symbol].get("daily", intraday)
+        return intraday if len(intraday) >= MIN_BARS_FOR_SIGNALS else self._candles[symbol].get("daily", intraday)
 
     def prime_from_history(self) -> int:
         """Create initial analyses from primed provider candles."""
@@ -110,6 +119,10 @@ class SignalEngine:
         return primed
 
     def _timeframe_candles(self, symbol: str, timeframe: str) -> list[Candle]:
+        if self._kline_store and timeframe in {"1m", "1h"}:
+            ws_candles = self._kline_store.candles(symbol, timeframe)
+            if ws_candles:
+                return ws_candles
         direct = self._candles[symbol].get(timeframe)
         if direct:
             return direct
@@ -146,7 +159,7 @@ class SignalEngine:
         if tick.symbol not in self.config.symbols:
             return None
         analysis_candles = self._analysis_candles(tick.symbol)
-        if len(analysis_candles) < 35:
+        if len(analysis_candles) < MIN_BARS_FOR_SIGNALS:
             return None
         previous = self.signals.get(tick.symbol)
         signal = self._build_signal(tick, analysis_candles)
@@ -160,6 +173,14 @@ class SignalEngine:
         volume_values = volume.calculate(candles)
         volatility_values = volatility.calculate(candles)
         structure = price_action.calculate(candles)
+        if self._kline_store:
+            snapshot = self._kline_store.structure(tick.symbol)
+            if snapshot.swing_low is not None:
+                structure["swing_low"] = snapshot.swing_low
+            if snapshot.swing_high is not None:
+                structure["swing_high"] = snapshot.swing_high
+            if snapshot.atr_14 is not None:
+                volatility_values = {**volatility_values, "atr_14": snapshot.atr_14}
         candle_patterns = patterns.calculate(candles)
         index_candles = self._analysis_candles(self.index_symbol)
         rs = relative_strength(candles, index_candles)

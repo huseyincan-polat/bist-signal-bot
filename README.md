@@ -5,11 +5,11 @@ Binance USDⓈ-M perpetual futures için teknik analiz ve fırsat tarayıcısı.
 ## Veri mimarisi
 
 - Evren, REST erişim kısıtlamalarında dahi WebSocket'in başlayabilmesi için 50 likit USDT perpetual sözleşmeyle sabitlenmiştir.
-- Bu 50 sözleşmenin resmî `bookTicker` akışları `wss://fstream.binance.com/ws` üzerinden JSON `SUBSCRIBE` ile asenkron tüketilir.
-- Gösterge serileri, resmî `/fapi/v1/klines` ile geçmiş 1 dakikalık mumlardan iş parçacığında hazırlanır.
+- Bu 50 sözleşmenin resmî `bookTicker` ve `kline_1m` / `kline_1h` akışları `wss://fstream.binance.com/ws` üzerinden JSON `SUBSCRIBE` ile asenkron tüketilir.
+- Her sembol için ~50 barlık 1m/1h tamponları bellekte tutulur; swing, ATR ve order-block bölgeleri artımlı hesaplanır.
 - REST ve WebSocket sözleşmeleri için [Binance USDⓈ-M Futures dokümantasyonu](https://developers.binance.com/docs/derivatives/usds-margined-futures) esas alınır.
 
-Kline geçmişi REST erişim kısıtlaması nedeniyle alınamıyorsa fiyatlar gösterilir, ancak sinyal motoru açılmaz.
+Kline WS akışı sessiz kalırsa 1m mumlar bookTicker fiyatlarından sentezlenir; 20 sn boyunca sessiz kalan semboller evrenden çıkarılır.
 
 Sinyal motoru, en az bir güncel WebSocket tick'i ve hazırlanmış geçmiş seri olmadan çalışmaz. Akış kesilir veya bayatlarsa panel `⚠️ REAL-TIME DATA NOT AVAILABLE` gösterir; Telegram bildirimleri kapalı kalır.
 

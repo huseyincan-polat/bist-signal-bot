@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import logging
 from contextlib import asynccontextmanager, suppress
-from dataclasses import replace
 
 import uvicorn
 
@@ -30,9 +29,6 @@ class SignalBotApplication:
         )
         self.engine_started = False
         self._provider_ready = False
-        self.history_primed = False
-        self.primed_symbol_count = 0
-        self._historical_task: asyncio.Task[None] | None = None
         self._task: asyncio.Task[None] | None = None
         self.api, self.dashboard = create_dashboard(
             config, self.engine, self.provider.health, lifespan=self._lifespan
@@ -51,6 +47,8 @@ class SignalBotApplication:
 
     def _apply_universe(self) -> None:
         """Use the provider's freshly ranked universe across app surfaces."""
+        from dataclasses import replace
+
         symbols = self.provider.symbols
         if not symbols:
             return
@@ -63,50 +61,33 @@ class SignalBotApplication:
         self.engine.index_symbol = self.config.index_symbol
         self.dashboard.config = self.config
 
-    async def _prime_history(self) -> None:
-        """Prime Futures indicators from official REST klines in a worker thread."""
-        fetch_history = getattr(self.provider, "prime_history", None)
-        if fetch_history is None:
-            return
-        try:
-            history = await asyncio.wait_for(fetch_history(), timeout=45)
-        except (asyncio.TimeoutError, Exception):
-            logger.warning("Futures historical priming unavailable")
-            return
-        for symbol, candles in history.items():
-            self.engine.seed_history(symbol, "1m", candles)
-        self.primed_symbol_count = sum(
-            1 for symbol in self.config.symbols if len(history.get(symbol, [])) >= 35
-        )
-        self.history_primed = self.primed_symbol_count > 0
-        logger.info("Futures historical primer completed: symbols=%s", self.primed_symbol_count)
+    def _analysis_ready(self) -> bool:
+        analysis_ready = getattr(self.provider, "analysis_ready", False)
+        return bool(analysis_ready)
 
     async def _consume(self) -> None:
         try:
-            # Step 1: connection configuration/handshake begins before any engine work.
             await self.provider.connect()
             self._apply_universe()
-            self._historical_task = asyncio.create_task(
-                self._prime_history(),
-                name="historical-primer",
-            )
+            bind_store = getattr(self.provider, "klines", None)
+            if bind_store is not None:
+                self.engine.bind_kline_store(bind_store)
             async for tick in self.provider.stream():
                 health = self.provider.health
                 self.dashboard.record_tick(tick)
-                # Steps 2–4 are satisfied only by accepted, current ticks for every symbol.
-                analysis_data_ready = health.ready_for_signals
-                if self.history_primed and analysis_data_ready and not self._provider_ready:
-                    primed_signals = self.engine.prime_from_history()
+                self._apply_universe()
+                analysis_data_ready = health.ready_for_signals and self._analysis_ready()
+                if analysis_data_ready and not self._provider_ready:
                     self.engine_started = True
                     self._provider_ready = True
                     logger.info(
-                        "Live group verified; analysis engine started with primed_signals=%s",
-                        primed_signals,
+                        "Kline buffers ready; analysis engine started symbols=%s kline_frames=%s",
+                        len(bind_store.symbols_with_min_bars()) if bind_store else 0,
+                        getattr(health, "kline_frames_received", 0),
                     )
                     await self.dashboard.broadcast_state()
                 elif not analysis_data_ready:
                     self._provider_ready = False
-                # Mock, delayed, stale, partial, and disconnected data cannot run the engine.
                 if not self.engine_started or not analysis_data_ready:
                     if tick.symbol in self.config.symbols:
                         await self.dashboard.publish(tick.symbol)
@@ -118,16 +99,9 @@ class SignalBotApplication:
                         try:
                             await self.notifier.send_signal(signal, real_time_ready=health.ready_for_signals)
                         except Exception:
-                            # Keep telemetry secret-safe: response/request may include credentials.
                             logger.warning("Telegram delivery failed; signal was not retried")
         except Exception:
-            # Do not include transport errors: a misconfigured URL could contain a secret.
             logger.warning("Market-data startup verification failed")
-        finally:
-            if self._historical_task and not self._historical_task.done():
-                self._historical_task.cancel()
-                with suppress(asyncio.CancelledError):
-                    await self._historical_task
 
 
 def build_application(config_path: str = "config.yaml") -> SignalBotApplication:

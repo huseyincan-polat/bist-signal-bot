@@ -10,16 +10,15 @@ import asyncio
 import json
 import logging
 from collections.abc import AsyncIterator
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
 from typing import Any
 
-import httpx
 import websockets
 
 from app.config import AppConfig
+from data.kline_buffer import BUFFER_SIZE, KlineBufferStore
 from data.models import Candle, MarketTick, ProviderHealth
-from data.provider import HistoricalProvider, RealTimeProvider
+from data.provider import RealTimeProvider
 from data.realtime import ConnectionMonitor, TickValidator
 
 logger = logging.getLogger(__name__)
@@ -36,19 +35,20 @@ FALLBACK_USDT_PERPETUALS = (
     "MANAUSDT", "RUNEUSDT", "KSMUSDT",
 )
 
-# Official USDⓈ-M market stream suffix. bookTicker is used because aggTrade can be
-# silent on some cloud egress paths while the documented SUBSCRIBE flow still acks.
-STREAM_SUFFIX = "@bookTicker"
+BOOK_TICKER_SUFFIX = "@bookTicker"
+SYMBOL_SILENCE_SECONDS = 20
+KLINE_SUBSCRIBE_BATCH = 20
 
 
-class BinanceFuturesProvider(RealTimeProvider, HistoricalProvider):
-    """Top-quote-volume USDT perpetual futures with bookTicker streaming."""
+class BinanceFuturesProvider(RealTimeProvider):
+    """USDT perpetual futures via bookTicker prices and kline WS indicator buffers."""
 
     name = "Binance USDⓈ-M Futures"
 
     def __init__(self, config: AppConfig) -> None:
         self.config = config
         self.symbols: tuple[str, ...] = ()
+        self.klines = KlineBufferStore(maxlen=BUFFER_SIZE)
         self._monitor = ConnectionMonitor(
             self.name,
             set(),
@@ -56,17 +56,25 @@ class BinanceFuturesProvider(RealTimeProvider, HistoricalProvider):
             partial_coverage_allowed=True,
         )
         self._validator = TickValidator(config.stale_after_seconds)
-        self._history: dict[tuple[str, str], list[Candle]] = {}
         self._previous_closes: dict[str, float] = {}
         self._first_tick_logged = False
         self._raw_frames_logged = 0
         self.first_frame_type: str | None = None
+        self._last_tick_at: dict[str, datetime] = {}
+        self._kline_probe_complete = False
+        self._use_tick_kline_fallback = False
 
     @property
     def health(self) -> ProviderHealth:
         health = self._monitor.refresh_freshness()
         health.first_frame_type = self.first_frame_type
+        health.kline_frames_received = self.klines.kline_frames_received
+        health.symbols_with_buffers = len(self.klines.symbols_with_full_buffers(BUFFER_SIZE))
         return health
+
+    @property
+    def analysis_ready(self) -> bool:
+        return bool(self.klines.symbols_with_min_bars())
 
     async def connect(self) -> None:
         self.symbols = FALLBACK_USDT_PERPETUALS
@@ -75,67 +83,33 @@ class BinanceFuturesProvider(RealTimeProvider, HistoricalProvider):
         self._monitor.mark_connected()
         logger.info("Binance Futures static universe loaded: symbols=%s", len(self.symbols))
 
-    async def prime_history(self) -> dict[str, list[Candle]]:
-        history = await asyncio.to_thread(self._fetch_history, self.symbols)
-        for symbol, candles in history.items():
-            self._history[(symbol, "1m")] = candles
-        return history
-
-    def _fetch_history(self, symbols: tuple[str, ...]) -> dict[str, list[Candle]]:
-        def fetch_symbol(symbol: str) -> tuple[str, list[Candle]]:
-            response = httpx.get(
-                f"{self.config.binance_rest_url}/fapi/v1/klines",
-                params={"symbol": symbol, "interval": "1m", "limit": self.config.binance_historical_limit},
-                timeout=10,
-            )
-            response.raise_for_status()
-            rows = response.json()
-            candles = [
-                Candle(
-                    symbol=symbol,
-                    timeframe="1m",
-                    timestamp=datetime.fromtimestamp(float(row[0]) / 1000, UTC),
-                    open=float(row[1]),
-                    high=float(row[2]),
-                    low=float(row[3]),
-                    close=float(row[4]),
-                    volume=float(row[5]),
-                )
-                for row in rows
-            ]
-            return symbol, candles
-
-        if not symbols:
-            return {}
-        history: dict[str, list[Candle]] = {}
-        try:
-            symbol, candles = fetch_symbol(symbols[0])
-            if candles:
-                history[symbol] = candles
-        except httpx.HTTPStatusError as error:
-            if error.response.status_code in (418, 451):
-                logger.warning("Binance klines unavailable: HTTP %s", error.response.status_code)
-                return {}
-            raise
-        with ThreadPoolExecutor(max_workers=8) as executor:
-            futures = [executor.submit(fetch_symbol, symbol) for symbol in symbols[1:]]
-            for future in as_completed(futures):
-                try:
-                    symbol, candles = future.result()
-                except (httpx.HTTPError, KeyError, TypeError, ValueError):
-                    continue
-                if candles:
-                    history[symbol] = candles
-        return history
-
     async def stream(self) -> AsyncIterator[MarketTick]:
         if not self.symbols:
             await self.connect()
+        queue: asyncio.Queue[MarketTick] = asyncio.Queue()
+        stop = asyncio.Event()
+        workers = [
+            asyncio.create_task(self._run_bookticker_feed(queue, stop), name="bookticker-feed"),
+            asyncio.create_task(self._run_kline_feed("1m", stop), name="kline-1m-feed"),
+            asyncio.create_task(self._run_kline_feed("1h", stop), name="kline-1h-feed"),
+            asyncio.create_task(self._prune_silent_symbols(stop), name="silent-symbol-pruner"),
+        ]
+        try:
+            while not stop.is_set():
+                tick = await queue.get()
+                yield tick
+        finally:
+            stop.set()
+            for worker in workers:
+                worker.cancel()
+            await asyncio.gather(*workers, return_exceptions=True)
+
+    async def _run_bookticker_feed(self, queue: asyncio.Queue[MarketTick], stop: asyncio.Event) -> None:
         url = f"{self.config.binance_websocket_url.rstrip('/')}/ws"
         failures = 0
         btc_probe = False
         awaiting_first_tick = True
-        while True:
+        while not stop.is_set():
             try:
                 async with websockets.connect(
                     url,
@@ -146,32 +120,36 @@ class BinanceFuturesProvider(RealTimeProvider, HistoricalProvider):
                     self._monitor.mark_connected()
                     failures = 0
                     active_symbols = ("BTCUSDT",) if btc_probe else self.symbols
-                    await socket.send(json.dumps(self.subscription_frame(active_symbols, request_id=1)))
-                    logger.info(
-                        "Binance Futures WebSocket connected: bookTicker streams=%s",
-                        len(active_symbols),
-                    )
-                    while True:
+                    await socket.send(json.dumps(self._subscription_frame(active_symbols, BOOK_TICKER_SUFFIX, 1)))
+                    logger.info("Binance bookTicker connected: streams=%s", len(active_symbols))
+                    while not stop.is_set():
                         recv_timeout = 30 if awaiting_first_tick else self.config.stale_after_seconds
                         raw_message = await asyncio.wait_for(socket.recv(), timeout=recv_timeout)
-                        frame_type = self._log_raw_frame(raw_message)
-                        tick = self.parse_message(raw_message)
+                        self._log_raw_frame(raw_message)
+                        tick = self._parse_bookticker(raw_message)
                         if tick and self._validator.validate(tick).accepted:
                             awaiting_first_tick = False
+                            now = datetime.now(UTC)
+                            self._last_tick_at[tick.symbol] = now
                             self._monitor.record_tick(tick, real_time=True)
+                            if self._use_tick_kline_fallback:
+                                self.klines.upsert_from_tick(tick)
                             if not self._first_tick_logged:
                                 logger.info(
-                                    "Binance Futures live tick: symbol=%s price=%s frame=%s timestamp=%s",
+                                    "Binance Futures live tick: symbol=%s price=%s",
                                     tick.symbol,
                                     tick.price,
-                                    frame_type,
-                                    tick.timestamp.isoformat(),
                                 )
                                 self._first_tick_logged = True
                             if btc_probe:
-                                await self._subscribe_remaining_symbols(socket)
+                                await self._subscribe_batches(
+                                    socket,
+                                    tuple(symbol for symbol in self.symbols if symbol != "BTCUSDT"),
+                                    BOOK_TICKER_SUFFIX,
+                                    start_id=2,
+                                )
                                 btc_probe = False
-                            yield tick
+                            await queue.put(tick)
             except (OSError, websockets.WebSocketException, asyncio.TimeoutError):
                 message = "Binance Futures stream unavailable"
                 if self._monitor.health.symbols_received:
@@ -179,31 +157,101 @@ class BinanceFuturesProvider(RealTimeProvider, HistoricalProvider):
                 else:
                     self._monitor.mark_error(message)
                 if not btc_probe:
-                    logger.warning("Binance 50-stream subscription was silent; probing BTCUSDT")
+                    logger.warning("Binance bookTicker batch was silent; probing BTCUSDT")
                     btc_probe = True
                 failures += 1
                 awaiting_first_tick = True
                 await asyncio.sleep(min(self.config.reconnect_backoff_seconds * 2 ** (failures - 1), 60))
 
-    def subscription_frame(self, symbols: tuple[str, ...], request_id: int) -> dict[str, object]:
-        """Documented Binance raw WebSocket SUBSCRIBE frame."""
+    async def _run_kline_feed(self, interval: str, stop: asyncio.Event) -> None:
+        """Dedicated connection per interval to avoid stream limits on one socket."""
+        url = f"{self.config.binance_websocket_url.rstrip('/')}/ws"
+        suffix = f"@kline_{interval}"
+        failures = 0
+        probe_started = datetime.now(UTC)
+        while not stop.is_set():
+            try:
+                async with websockets.connect(
+                    url,
+                    ping_interval=20,
+                    ping_timeout=20,
+                    close_timeout=5,
+                ) as socket:
+                    failures = 0
+                    await self._subscribe_batches(socket, self.symbols, suffix, start_id=1)
+                    logger.info("Binance kline_%s connected: symbols=%s", interval, len(self.symbols))
+                    while not stop.is_set():
+                        raw_message = await asyncio.wait_for(socket.recv(), timeout=30)
+                        self._log_raw_frame(raw_message)
+                        parsed = self._parse_kline(raw_message, interval)
+                        if parsed:
+                            candle, is_closed = parsed
+                            if candle.symbol in self.symbols:
+                                self.klines.upsert_kline(candle, is_closed)
+                                if interval == "1m" and not self._kline_probe_complete:
+                                    self._kline_probe_complete = True
+                                    self._use_tick_kline_fallback = False
+                                    logger.info("Binance kline_%s frames flowing for %s", interval, candle.symbol)
+            except (OSError, websockets.WebSocketException, asyncio.TimeoutError):
+                failures += 1
+                if (
+                    interval == "1m"
+                    and not self._kline_probe_complete
+                    and (datetime.now(UTC) - probe_started).total_seconds() >= 30
+                ):
+                    self._use_tick_kline_fallback = True
+                    self._kline_probe_complete = True
+                    logger.warning("Binance kline_1m silent; falling back to bookTicker 1m synthesis")
+                await asyncio.sleep(min(self.config.reconnect_backoff_seconds * 2 ** (failures - 1), 60))
+
+    async def _prune_silent_symbols(self, stop: asyncio.Event) -> None:
+        while not stop.is_set():
+            await asyncio.sleep(5)
+            now = datetime.now(UTC)
+            silent = [
+                symbol
+                for symbol in self.symbols
+                if symbol not in self._last_tick_at
+                or (now - self._last_tick_at[symbol]).total_seconds() > SYMBOL_SILENCE_SECONDS
+            ]
+            if not silent:
+                continue
+            remaining = tuple(symbol for symbol in self.symbols if symbol not in silent)
+            if len(remaining) == len(self.symbols):
+                continue
+            logger.warning("Dropping silent symbols after %ss: %s", SYMBOL_SILENCE_SECONDS, silent)
+            self.symbols = remaining
+            self._monitor.health.expected_symbols = set(self.symbols)
+
+    @staticmethod
+    def _subscription_frame(symbols: tuple[str, ...], suffix: str, request_id: int) -> dict[str, object]:
         return {
             "method": "SUBSCRIBE",
-            "params": [f"{symbol.lower()}{STREAM_SUFFIX}" for symbol in symbols],
+            "params": [f"{symbol.lower()}{suffix}" for symbol in symbols],
             "id": request_id,
         }
 
-    async def _subscribe_remaining_symbols(self, socket: Any) -> None:
-        remaining = tuple(symbol for symbol in self.symbols if symbol != "BTCUSDT")
-        for request_id, start in enumerate(range(0, len(remaining), 25), start=2):
-            batch = remaining[start:start + 25]
-            await socket.send(json.dumps(self.subscription_frame(batch, request_id)))
-        logger.info("Binance BTCUSDT probe succeeded; requested remaining streams in two batches")
+    async def _subscribe_batches(
+        self,
+        socket: Any,
+        symbols: tuple[str, ...],
+        suffix: str,
+        *,
+        start_id: int,
+    ) -> None:
+        request_id = start_id
+        for start in range(0, len(symbols), KLINE_SUBSCRIBE_BATCH):
+            batch = symbols[start:start + KLINE_SUBSCRIBE_BATCH]
+            await socket.send(json.dumps(self._subscription_frame(batch, suffix, request_id)))
+            request_id += 1
 
     @staticmethod
     def classify_frame(payload: dict[str, Any]) -> str:
         if payload.get("e") == "bookTicker":
             return "bookTicker"
+        if payload.get("e") == "kline":
+            interval = payload.get("k", {}).get("i")
+            return f"kline_{interval}" if interval else "kline"
         if "error" in payload:
             return "error"
         if "result" in payload and "id" in payload:
@@ -211,7 +259,6 @@ class BinanceFuturesProvider(RealTimeProvider, HistoricalProvider):
         return str(payload.get("e") or "unknown")
 
     def _log_raw_frame(self, raw_message: str | bytes) -> str:
-        """Log only the first public frames, truncated to prevent noisy terminals."""
         preview = raw_message.decode() if isinstance(raw_message, bytes) else raw_message
         frame_type = "unknown"
         try:
@@ -222,12 +269,12 @@ class BinanceFuturesProvider(RealTimeProvider, HistoricalProvider):
             frame_type = "non_json"
         if self.first_frame_type is None:
             self.first_frame_type = frame_type
-        if self._raw_frames_logged < 2:
+        if self._raw_frames_logged < 3:
             logger.info("Binance WebSocket raw frame [%s]: %s", frame_type, preview[:240])
             self._raw_frames_logged += 1
         return frame_type
 
-    def parse_message(self, raw_message: str | bytes | dict[str, Any]) -> MarketTick | None:
+    def _parse_bookticker(self, raw_message: str | bytes | dict[str, Any]) -> MarketTick | None:
         if isinstance(raw_message, (str, bytes)):
             try:
                 payload = json.loads(raw_message)
@@ -265,5 +312,35 @@ class BinanceFuturesProvider(RealTimeProvider, HistoricalProvider):
         except (TypeError, ValueError, OSError):
             return None
 
+    @staticmethod
+    def _parse_kline(raw_message: str | bytes | dict[str, Any], interval: str) -> tuple[Candle, bool] | None:
+        if isinstance(raw_message, (str, bytes)):
+            try:
+                payload = json.loads(raw_message)
+            except (TypeError, json.JSONDecodeError):
+                return None
+        else:
+            payload = raw_message
+        data = payload.get("data", payload)
+        if not isinstance(data, dict) or data.get("e") != "kline":
+            return None
+        kline = data.get("k")
+        if not isinstance(kline, dict) or kline.get("i") != interval:
+            return None
+        try:
+            candle = Candle(
+                symbol=str(data["s"]),
+                timeframe=interval,
+                timestamp=datetime.fromtimestamp(float(kline["t"]) / 1000, UTC),
+                open=float(kline["o"]),
+                high=float(kline["h"]),
+                low=float(kline["l"]),
+                close=float(kline["c"]),
+                volume=float(kline["v"]),
+            )
+            return candle, bool(kline.get("x"))
+        except (KeyError, TypeError, ValueError):
+            return None
+
     def historical_candles(self, symbol: str, timeframe: str) -> list[Candle]:
-        return list(self._history.get((symbol, timeframe), []))
+        return self.klines.candles(symbol, timeframe)
