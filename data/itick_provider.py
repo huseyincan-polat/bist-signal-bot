@@ -218,10 +218,16 @@ class ITickRealTimeProvider(RealTimeProvider):
     ) -> None:
         """Wait for the provider acknowledgement before subscribing the next group."""
         await socket.send(json.dumps(self.unsubscribe_payload(symbols)))
-        message = await self._receive(socket, timeout=5)
-        if message.get("resAc") != "unsubscribe" or message.get("code") != 1:
-            raise ConnectionError("iTick unsubscribe was not acknowledged")
-        logger.info("iTick rotation group=%s unsubscribed", group_index + 1)
+        deadline = asyncio.get_running_loop().time() + 5
+        while (remaining := deadline - asyncio.get_running_loop().time()) > 0:
+            message = await self._receive(socket, timeout=remaining)
+            if message.get("resAc") != "unsubscribe":
+                continue
+            if message.get("code") != 1:
+                raise ConnectionError("iTick unsubscribe was rejected")
+            logger.info("iTick rotation group=%s unsubscribed", group_index + 1)
+            return
+        raise ConnectionError("iTick unsubscribe was not acknowledged")
 
     async def _receive(self, socket: Any, timeout: float) -> dict[str, Any]:
         raw_message = await asyncio.wait_for(socket.recv(), timeout=timeout)
