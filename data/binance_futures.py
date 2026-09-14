@@ -23,6 +23,18 @@ from data.realtime import ConnectionMonitor, TickValidator
 
 logger = logging.getLogger(__name__)
 
+FALLBACK_USDT_PERPETUALS = (
+    "BTCUSDT", "ETHUSDT", "BNBUSDT", "XRPUSDT", "SOLUSDT", "DOGEUSDT",
+    "ADAUSDT", "TRXUSDT", "LINKUSDT", "AVAXUSDT", "LTCUSDT", "BCHUSDT",
+    "XLMUSDT", "DOTUSDT", "UNIUSDT", "AAVEUSDT", "NEARUSDT", "APTUSDT",
+    "OPUSDT", "ARBUSDT", "FILUSDT", "ATOMUSDT", "ETCUSDT", "ICPUSDT",
+    "INJUSDT", "SEIUSDT", "WIFUSDT", "FETUSDT", "TIAUSDT", "RENDERUSDT",
+    "ONDOUSDT", "CRVUSDT", "PENDLEUSDT", "ENAUSDT", "WLDUSDT", "GALAUSDT",
+    "1000PEPEUSDT", "1000SHIBUSDT", "TAOUSDT", "JUPUSDT", "LDOUSDT",
+    "ALGOUSDT", "VETUSDT", "EOSUSDT", "KAVAUSDT", "AXSUSDT", "SANDUSDT",
+    "MANAUSDT", "RUNEUSDT", "KSMUSDT",
+)
+
 
 class BinanceFuturesProvider(RealTimeProvider, HistoricalProvider):
     """Top-quote-volume USDT perpetual futures with aggTrade streaming."""
@@ -48,12 +60,18 @@ class BinanceFuturesProvider(RealTimeProvider, HistoricalProvider):
         return self._monitor.refresh_freshness()
 
     async def connect(self) -> None:
+        fallback_reason: str | None = None
         try:
             symbols, previous_closes = await asyncio.to_thread(self._refresh_universe)
         except httpx.HTTPStatusError as error:
-            self._monitor.mark_error(f"Binance Futures universe HTTP {error.response.status_code}")
-            logger.warning("Binance Futures universe request failed: HTTP %s", error.response.status_code)
-            raise
+            status_code = error.response.status_code
+            if status_code not in (418, 451):
+                self._monitor.mark_error(f"Binance Futures universe HTTP {status_code}")
+                logger.warning("Binance Futures universe request failed: HTTP %s", status_code)
+                raise
+            symbols, previous_closes = FALLBACK_USDT_PERPETUALS, {}
+            fallback_reason = f"Binance REST universe HTTP {status_code}; fallback universe active"
+            logger.warning("Binance REST universe unavailable: HTTP %s; using fallback symbols", status_code)
         if not symbols:
             self._monitor.mark_error("Binance Futures universe is unavailable")
             raise RuntimeError("No Binance USDT perpetual symbols available")
@@ -61,7 +79,8 @@ class BinanceFuturesProvider(RealTimeProvider, HistoricalProvider):
         self._previous_closes = previous_closes
         self._monitor.health.expected_symbols = set(symbols)
         self._monitor.mark_connected()
-        logger.info("Binance Futures universe refreshed: symbols=%s", len(symbols))
+        self._monitor.health.last_error = fallback_reason
+        logger.info("Binance Futures universe ready: symbols=%s", len(symbols))
 
     def _refresh_universe(self) -> tuple[tuple[str, ...], dict[str, float]]:
         with httpx.Client(base_url=self.config.binance_rest_url, timeout=10) as client:
@@ -124,9 +143,20 @@ class BinanceFuturesProvider(RealTimeProvider, HistoricalProvider):
             ]
             return symbol, candles
 
+        if not symbols:
+            return {}
         history: dict[str, list[Candle]] = {}
+        try:
+            symbol, candles = fetch_symbol(symbols[0])
+            if candles:
+                history[symbol] = candles
+        except httpx.HTTPStatusError as error:
+            if error.response.status_code in (418, 451):
+                logger.warning("Binance klines unavailable: HTTP %s", error.response.status_code)
+                return {}
+            raise
         with ThreadPoolExecutor(max_workers=8) as executor:
-            futures = [executor.submit(fetch_symbol, symbol) for symbol in symbols]
+            futures = [executor.submit(fetch_symbol, symbol) for symbol in symbols[1:]]
             for future in as_completed(futures):
                 try:
                     symbol, candles = future.result()

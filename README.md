@@ -9,6 +9,8 @@ Binance USDⓈ-M perpetual futures için teknik analiz ve fırsat tarayıcısı.
 - Gösterge serileri, resmî `/fapi/v1/klines` ile geçmiş 1 dakikalık mumlardan iş parçacığında hazırlanır.
 - REST ve WebSocket sözleşmeleri için [Binance USDⓈ-M Futures dokümantasyonu](https://developers.binance.com/docs/derivatives/usds-margined-futures) esas alınır.
 
+Binance REST erişimi `418` veya bölgesel `451` ile engellenirse uygulama 50 yaygın USDT perpetual sözleşmeden oluşan yedek evrenle WebSocket'i yine başlatır. Kline geçmişi alınamıyorsa fiyatlar gösterilir, ancak sinyal motoru açılmaz.
+
 Sinyal motoru, en az bir güncel WebSocket tick'i ve hazırlanmış geçmiş seri olmadan çalışmaz. Akış kesilir veya bayatlarsa panel `⚠️ REAL-TIME DATA NOT AVAILABLE` gösterir; Telegram bildirimleri kapalı kalır.
 
 ## Risk filtresi
