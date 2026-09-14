@@ -28,7 +28,6 @@ class AppConfig:
     telegram_chat_id: str | None = None
     binance_rest_url: str = "https://fapi.binance.com"
     binance_websocket_url: str = "wss://fstream.binance.com"
-    binance_universe_size: int = 50
     binance_historical_limit: int = 100
     scoring: dict[str, Any] = field(default_factory=dict)
     backtest: dict[str, Any] = field(default_factory=dict)
@@ -72,7 +71,6 @@ def load_config(path: str | Path = "config.yaml") -> AppConfig:
         telegram_chat_id=_read_env("TELEGRAM_CHAT_ID"),
         binance_rest_url=binance.get("rest_url", "https://fapi.binance.com"),
         binance_websocket_url=binance.get("websocket_url", "wss://fstream.binance.com"),
-        binance_universe_size=int(binance.get("universe_size", 50)),
         binance_historical_limit=int(binance.get("historical_limit", 100)),
         scoring=raw.get("scoring", {}),
         backtest=raw.get("backtest", {}),

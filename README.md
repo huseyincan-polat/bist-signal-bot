@@ -4,12 +4,12 @@ Binance USDⓈ-M perpetual futures için teknik analiz ve fırsat tarayıcısı.
 
 ## Veri mimarisi
 
-- Evren, Binance'in resmî `/fapi/v1/exchangeInfo` ve `/fapi/v1/ticker/24hr` market-data uç noktalarından USDT perpetual sözleşmelerin 24 saatlik quote hacmine göre yenilenir.
-- En yüksek hacimli 50 sözleşmenin resmî `aggTrade` combined stream'i `wss://fstream.binance.com/stream?streams=...` üzerinden asenkron tüketilir.
+- Evren, REST erişim kısıtlamalarında dahi WebSocket'in başlayabilmesi için 50 likit USDT perpetual sözleşmeyle sabitlenmiştir.
+- Bu 50 sözleşmenin resmî `aggTrade` combined stream'i `wss://fstream.binance.com/stream?streams=...` üzerinden asenkron tüketilir.
 - Gösterge serileri, resmî `/fapi/v1/klines` ile geçmiş 1 dakikalık mumlardan iş parçacığında hazırlanır.
 - REST ve WebSocket sözleşmeleri için [Binance USDⓈ-M Futures dokümantasyonu](https://developers.binance.com/docs/derivatives/usds-margined-futures) esas alınır.
 
-Binance REST erişimi `418` veya bölgesel `451` ile engellenirse uygulama 50 yaygın USDT perpetual sözleşmeden oluşan yedek evrenle WebSocket'i yine başlatır. Kline geçmişi alınamıyorsa fiyatlar gösterilir, ancak sinyal motoru açılmaz.
+Kline geçmişi REST erişim kısıtlaması nedeniyle alınamıyorsa fiyatlar gösterilir, ancak sinyal motoru açılmaz.
 
 Sinyal motoru, en az bir güncel WebSocket tick'i ve hazırlanmış geçmiş seri olmadan çalışmaz. Akış kesilir veya bayatlarsa panel `⚠️ REAL-TIME DATA NOT AVAILABLE` gösterir; Telegram bildirimleri kapalı kalır.
 

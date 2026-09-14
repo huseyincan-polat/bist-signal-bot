@@ -24,8 +24,8 @@ from data.realtime import ConnectionMonitor, TickValidator
 logger = logging.getLogger(__name__)
 
 FALLBACK_USDT_PERPETUALS = (
-    "BTCUSDT", "ETHUSDT", "BNBUSDT", "XRPUSDT", "SOLUSDT", "DOGEUSDT",
-    "ADAUSDT", "TRXUSDT", "LINKUSDT", "AVAXUSDT", "LTCUSDT", "BCHUSDT",
+    "BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "ADAUSDT", "BNBUSDT",
+    "DOGEUSDT", "TRXUSDT", "LINKUSDT", "AVAXUSDT", "LTCUSDT", "BCHUSDT",
     "XLMUSDT", "DOTUSDT", "UNIUSDT", "AAVEUSDT", "NEARUSDT", "APTUSDT",
     "OPUSDT", "ARBUSDT", "FILUSDT", "ATOMUSDT", "ETCUSDT", "ICPUSDT",
     "INJUSDT", "SEIUSDT", "WIFUSDT", "FETUSDT", "TIAUSDT", "RENDERUSDT",
@@ -60,58 +60,11 @@ class BinanceFuturesProvider(RealTimeProvider, HistoricalProvider):
         return self._monitor.refresh_freshness()
 
     async def connect(self) -> None:
-        fallback_reason: str | None = None
-        try:
-            symbols, previous_closes = await asyncio.to_thread(self._refresh_universe)
-        except httpx.HTTPStatusError as error:
-            status_code = error.response.status_code
-            if status_code not in (418, 451):
-                self._monitor.mark_error(f"Binance Futures universe HTTP {status_code}")
-                logger.warning("Binance Futures universe request failed: HTTP %s", status_code)
-                raise
-            symbols, previous_closes = FALLBACK_USDT_PERPETUALS, {}
-            fallback_reason = f"Binance REST universe HTTP {status_code}; fallback universe active"
-            logger.warning("Binance REST universe unavailable: HTTP %s; using fallback symbols", status_code)
-        if not symbols:
-            self._monitor.mark_error("Binance Futures universe is unavailable")
-            raise RuntimeError("No Binance USDT perpetual symbols available")
-        self.symbols = symbols
-        self._previous_closes = previous_closes
-        self._monitor.health.expected_symbols = set(symbols)
+        self.symbols = FALLBACK_USDT_PERPETUALS
+        self._previous_closes = {}
+        self._monitor.health.expected_symbols = set(self.symbols)
         self._monitor.mark_connected()
-        self._monitor.health.last_error = fallback_reason
-        logger.info("Binance Futures universe ready: symbols=%s", len(symbols))
-
-    def _refresh_universe(self) -> tuple[tuple[str, ...], dict[str, float]]:
-        with httpx.Client(base_url=self.config.binance_rest_url, timeout=10) as client:
-            exchange_response = client.get("/fapi/v1/exchangeInfo")
-            ticker_response = client.get("/fapi/v1/ticker/24hr")
-        exchange_response.raise_for_status()
-        ticker_response.raise_for_status()
-        exchange_info = exchange_response.json()
-        tickers = ticker_response.json()
-        if not isinstance(exchange_info, dict) or not isinstance(tickers, list):
-            raise RuntimeError("Binance Futures returned an invalid market-data response")
-        perpetuals = {
-            item["symbol"]
-            for item in exchange_info.get("symbols", [])
-            if item.get("status") == "TRADING"
-            and item.get("contractType") == "PERPETUAL"
-            and item.get("quoteAsset") == "USDT"
-        }
-        ranked = sorted(
-            (item for item in tickers if item.get("symbol") in perpetuals),
-            key=lambda item: float(item.get("quoteVolume", 0) or 0),
-            reverse=True,
-        )[: self.config.binance_universe_size]
-        return (
-            tuple(item["symbol"] for item in ranked),
-            {
-                item["symbol"]: float(item["prevClosePrice"])
-                for item in ranked
-                if item.get("prevClosePrice") not in (None, "")
-            },
-        )
+        logger.info("Binance Futures static universe loaded: symbols=%s", len(self.symbols))
 
     async def prime_history(self) -> dict[str, list[Candle]]:
         history = await asyncio.to_thread(self._fetch_history, self.symbols)

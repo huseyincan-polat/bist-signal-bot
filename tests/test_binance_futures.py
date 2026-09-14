@@ -2,8 +2,6 @@ import asyncio
 from dataclasses import replace
 from datetime import UTC, datetime
 
-import httpx
-
 from data.binance_futures import FALLBACK_USDT_PERPETUALS, BinanceFuturesProvider
 from data.models import MarketTick
 from tests.conftest import make_config
@@ -55,16 +53,9 @@ def test_binance_historical_priming_runs_away_from_event_loop() -> None:
     assert asyncio.run(prime_without_blocking()) < 0.04
 
 
-def test_rest_418_uses_fallback_universe_so_websocket_can_start() -> None:
+def test_static_universe_starts_websocket_without_a_rest_universe_request() -> None:
     provider = BinanceFuturesProvider(replace(make_config("binance_futures")))
-    request = httpx.Request("GET", "https://fapi.binance.com/fapi/v1/ticker/24hr")
-    response = httpx.Response(418, request=request)
-
-    def blocked_universe() -> tuple[tuple[str, ...], dict[str, float]]:
-        raise httpx.HTTPStatusError("blocked", request=request, response=response)
-
-    provider._refresh_universe = blocked_universe  # type: ignore[method-assign]
     asyncio.run(provider.connect())
     assert provider.symbols == FALLBACK_USDT_PERPETUALS
     assert len(provider.symbols) == 50
-    assert provider.health.last_error == "Binance REST universe HTTP 418; fallback universe active"
+    assert provider.symbols[:5] == ("BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "ADAUSDT")

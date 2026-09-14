@@ -10,13 +10,12 @@ dashboard:
 telegram:
   enabled: false
 binance_futures:
-  # Official USDⓈ-M endpoints documented by Binance.
+  # Official USDⓈ-M Kline REST and combined WebSocket endpoints.
   rest_url: https://fapi.binance.com
   websocket_url: wss://fstream.binance.com
-  universe_size: 50
   historical_limit: 100
 universe:
-  # Populated at runtime from official 24-hour quote-volume tickers.
+  # The provider owns the static 50-contract fallback universe.
   symbols: []
   benchmark_symbol: BTCUSDT
 scoring:
