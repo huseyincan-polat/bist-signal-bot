@@ -18,6 +18,8 @@ def test_dashboard_defaults_to_full_ham_liste_view() -> None:
     assert 'data-filter="ACTIVE">LONG / SHORT' in DASHBOARD_HTML
     assert "HAM LİSTE" in DASHBOARD_HTML
     assert "Hüseyin Can Polat tarafından yapılmıştır" in DASHBOARD_HTML
+    assert "const formatPrice=" in DASHBOARD_HTML
+    assert "if(a<1)d=4;else if(a<1000)d=3" in DASHBOARD_HTML
 
 
 def test_dashboard_searches_contract_symbols() -> None:
