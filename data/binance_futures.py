@@ -60,8 +60,14 @@ class BinanceFuturesProvider(RealTimeProvider, HistoricalProvider):
 
     def _refresh_universe(self) -> tuple[tuple[str, ...], dict[str, float]]:
         with httpx.Client(base_url=self.config.binance_rest_url, timeout=10) as client:
-            exchange_info = client.get("/fapi/v1/exchangeInfo").json()
-            tickers = client.get("/fapi/v1/ticker/24hr").json()
+            exchange_response = client.get("/fapi/v1/exchangeInfo")
+            ticker_response = client.get("/fapi/v1/ticker/24hr")
+        exchange_response.raise_for_status()
+        ticker_response.raise_for_status()
+        exchange_info = exchange_response.json()
+        tickers = ticker_response.json()
+        if not isinstance(exchange_info, dict) or not isinstance(tickers, list):
+            raise RuntimeError("Binance Futures returned an invalid market-data response")
         perpetuals = {
             item["symbol"]
             for item in exchange_info.get("symbols", [])
