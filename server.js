@@ -13,6 +13,8 @@ const {
   fetchAltins1Quote,
   toYahooQuoteShape,
 } = require("./lib/altins1-scraper");
+const targetsStore = require("./lib/targets");
+const { enrichRow, collectTriggerEvents } = require("./lib/alerts");
 
 const PORT = Number(process.env.PORT || 10000);
 const POLL_MS = 60 * 1000;
@@ -20,6 +22,8 @@ const HISTORY_DAYS = 400;
 const FETCH_DELAY_MS = 350;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+targetsStore.init();
 
 const app = express();
 const notifier = new TelegramNotifier(
@@ -34,6 +38,7 @@ const state = {
   scanning: false,
   xu100Regime: null,
   telegramEnabled: notifier.enabled,
+  alarmRegistered: false,
   telegramTestSent: false,
 };
 
@@ -122,9 +127,6 @@ async function scanMarket() {
           price: null,
           score: 0,
           status: "BEKLE",
-          stop: null,
-          target: null,
-          rr: 0,
           dailyChangePercent: null,
           weeklyChangePercent: null,
           monthlyChangePercent: null,
@@ -135,11 +137,19 @@ async function scanMarket() {
     }
 
     rows.sort((a, b) => b.score - a.score);
-    state.rows = rows;
+
+    const targets = targetsStore.load();
+    const enriched = rows.map((row) => enrichRow(row, targets));
+    state.rows = enriched;
     state.lastScanAt = new Date().toISOString();
 
+    const triggerEvents = collectTriggerEvents(enriched);
+    for (const event of triggerEvents) {
+      await notifier.send(event.message);
+    }
+
     try {
-      const tg = await notifier.processRows(rows);
+      const tg = await notifier.processRows(enriched);
       if (tg.sent > 0) {
         console.log(`Telegram: ${tg.sent} mesaj gönderildi (${tg.events.join(", ")})`);
       }
@@ -158,42 +168,46 @@ function dashboardHtml() {
   return `<!DOCTYPE html>
 <html lang="tr"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>BIST Confluence Swing Radar</title>
+<title>BIST SMC Alerts</title>
 <style>
-:root{--bg:#07111f;--panel:#0d1b2d;--line:#203952;--ink:#e7f0fb;--muted:#93a9c3;--green:#2dd4a3;--amber:#fbbf24;--blue:#4bb3fd;--pct-up:#00C851;--pct-down:#ff4444}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:14px Inter,system-ui,sans-serif;min-height:100vh;display:flex;flex-direction:column}
-main{flex:1;max-width:1680px;margin:0 auto;padding:24px;width:100%}
-h1{margin:0 0 6px;font-size:26px}.sub{color:var(--muted);margin:0 0 18px}
-.meta{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:18px}
-.pill{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:8px 12px;font-size:13px}
-.pill strong{display:block;font-size:16px;margin-top:4px}
-.search-wrap{margin-bottom:14px}
-#searchInput{width:100%;max-width:360px;padding:10px 14px;border:1px solid var(--line);border-radius:8px;background:var(--panel);color:var(--ink);font-size:14px}
+:root{--bg:#0a0a0a;--panel:#111;--line:#222;--ink:#d8d8d8;--muted:#666;--green:#00C851;--red:#ff4444;--gray:#888;--pct-up:#00C851;--pct-down:#ff4444}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:13px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;min-height:100vh;display:flex;flex-direction:column}
+main{flex:1;max-width:1680px;margin:0 auto;padding:20px;width:100%}
+.brand{font-size:12px;letter-spacing:.22em;text-transform:uppercase;color:#9ef01a;margin-bottom:18px}
+.brand span{color:#fff;font-weight:700}
+.system-line{color:var(--muted);margin:0 0 18px;font-size:12px}
+.meta{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px}
+.pill{background:var(--panel);border:1px solid var(--line);padding:8px 10px;font-size:11px}
+.pill strong{display:block;font-size:13px;margin-top:4px;color:#fff}
+.search-wrap{margin-bottom:12px}
+#searchInput{width:100%;max-width:360px;padding:9px 12px;border:1px solid var(--line);background:var(--panel);color:var(--ink);font:inherit}
 #searchInput::placeholder{color:var(--muted)}
-.table-wrap{overflow:auto;border:1px solid var(--line);border-radius:10px}
-table{width:100%;border-collapse:collapse;min-width:1200px;background:var(--panel)}
-th{text-align:left;color:var(--muted);font-size:11px;letter-spacing:.05em;padding:12px;border-bottom:1px solid var(--line)}
-td{padding:12px;border-bottom:1px solid #172c42;white-space:nowrap}
+.table-wrap{overflow:auto;border:1px solid var(--line)}
+table{width:100%;border-collapse:collapse;min-width:1180px;background:var(--panel)}
+th{text-align:left;color:var(--muted);font-size:10px;letter-spacing:.12em;text-transform:uppercase;padding:10px;border-bottom:1px solid var(--line)}
+td{padding:10px;border-bottom:1px solid #1a1a1a;white-space:nowrap}
 tr:last-child td{border:0}
-.firsat{color:var(--green);font-weight:800}.bekle{color:var(--amber)}
 .score-high{color:var(--green);font-weight:700}
-.pct-up{color:var(--pct-up);font-weight:600}.pct-down{color:var(--pct-down);font-weight:600}
-.chart-btn{border:1px solid var(--line);background:#14253b;color:var(--ink);padding:6px 10px;border-radius:6px;cursor:pointer;font-size:13px}
-.chart-btn:hover{border-color:var(--blue);color:var(--blue)}
-.modal{position:fixed;inset:0;background:rgba(0,0,0,.75);display:none;align-items:center;justify-content:center;z-index:1000;padding:20px}
+.pct-up{color:var(--pct-up)}.pct-down{color:var(--pct-down)}
+.action-watch{color:var(--gray)}.action-tp{color:var(--green);font-weight:700}
+.action-sl{color:var(--red);font-weight:700}.action-none{color:var(--muted)}
+.firsat{color:var(--green)}.bekle{color:var(--gray)}
+.chart-btn{border:1px solid var(--line);background:#0a0a0a;color:var(--ink);padding:5px 8px;cursor:pointer;font:inherit}
+.chart-btn:hover{border-color:#9ef01a;color:#9ef01a}
+.modal{position:fixed;inset:0;background:rgba(0,0,0,.82);display:none;align-items:center;justify-content:center;z-index:1000;padding:20px}
 .modal.open{display:flex}
-.modal-panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;width:min(1100px,96vw);height:min(720px,88vh);display:flex;flex-direction:column;overflow:hidden}
-.modal-header{display:flex;justify-content:space-between;align-items:center;padding:12px 16px;border-bottom:1px solid var(--line)}
-.modal-title{font-weight:700;font-size:16px}
-.modal-close{background:transparent;border:1px solid var(--line);color:var(--ink);border-radius:6px;padding:6px 12px;cursor:pointer}
+.modal-panel{background:#111;border:1px solid var(--line);width:min(1100px,96vw);height:min(720px,88vh);display:flex;flex-direction:column}
+.modal-header{display:flex;justify-content:space-between;align-items:center;padding:10px 12px;border-bottom:1px solid var(--line)}
+.modal-close{background:#0a0a0a;border:1px solid var(--line);color:var(--ink);padding:5px 10px;cursor:pointer;font:inherit}
 .modal-body{flex:1;min-height:0}
 #chartContainer{height:100%;width:100%}
-footer{margin-top:auto;padding:18px 24px;border-top:1px solid var(--line);background:var(--panel);text-align:center;color:var(--ink)}
-@media(max-width:700px){main{padding:14px}h1{font-size:22px}#searchInput{max-width:100%}}
+footer{margin-top:auto;padding:14px 20px;border-top:1px solid var(--line);text-align:center;color:var(--muted);font-size:11px}
+@media(max-width:700px){main{padding:12px}#searchInput{max-width:100%}}
 </style></head><body>
 <main>
-  <h1>BIST Confluence Swing Radar</h1>
-  <p class="sub">Yahoo Finance günlük/haftalık veri · 1 dk tarama · Skor ≥75 + R/R ≥1:2 → FIRSAT</p>
+  <div class="brand">Powered By <span>Can Polat</span></div>
+  <p class="system-line">[ System: BIST 1m Loop | Custom SMC Alerts ]</p>
   <div class="meta">
     <div class="pill">Son Tarama (15 dk gecikmeli)<strong id="scan">—</strong></div>
     <div class="pill">XU100 rejim<strong id="regime">—</strong></div>
@@ -207,7 +221,7 @@ footer{margin-top:auto;padding:18px 24px;border-top:1px solid var(--line);backgr
     <table>
       <thead><tr>
         <th>Sembol</th><th>Fiyat</th><th>Günlük %</th><th>Haftalık %</th><th>Aylık %</th><th>Yıllık %</th>
-        <th>Skor</th><th>Durum</th><th>Stop</th><th>Hedef</th><th>R/R</th><th>RSI</th><th>Grafik</th>
+        <th>Skor</th><th>Sinyal</th><th>Action</th><th>TP</th><th>SL</th><th>RSI</th><th>Grafik</th>
       </tr></thead>
       <tbody id="rows"><tr><td colspan="13" style="color:var(--muted);padding:24px">Veri yükleniyor…</td></tr></tbody>
     </table>
@@ -216,7 +230,7 @@ footer{margin-top:auto;padding:18px 24px;border-top:1px solid var(--line);backgr
 <div id="chartModal" class="modal" role="dialog" aria-modal="true" aria-labelledby="chartTitle">
   <div class="modal-panel">
     <div class="modal-header">
-      <span class="modal-title" id="chartTitle">Grafik</span>
+      <span id="chartTitle">Grafik</span>
       <button type="button" class="modal-close" id="chartClose" aria-label="Kapat">✕ Kapat</button>
     </div>
     <div class="modal-body"><div id="chartContainer"></div></div>
@@ -225,11 +239,11 @@ footer{margin-top:auto;padding:18px 24px;border-top:1px solid var(--line);backgr
 <footer role="contentinfo">Hüseyin Can Polat tarafından yapılmıştır</footer>
 <script>
 let allRows=[];
-const fmt=n=>n==null?'—':Number(n).toLocaleString('tr-TR',{minimumFractionDigits:2,maximumFractionDigits:2});
+const fmt=n=>n==null||n==='-'?'—':Number(n).toLocaleString('tr-TR',{minimumFractionDigits:2,maximumFractionDigits:2});
 const fmtPct=v=>{if(v==null||Number.isNaN(v))return'—';const sign=v>=0?'+':'';return sign+Number(v).toFixed(2)+'%'};
 const pctCls=v=>v==null?'':v>=0?'pct-up':'pct-down';
-const cls=s=>s==='FIRSAT'?'firsat':'bekle';
 const tvSymbol=s=>('BIST:'+(s||'').replace('.IS',''));
+const actionCls=a=>a==='Take Profit'?'action-tp':a==='Stop Loss'?'action-sl':a==='Watch'?'action-watch':'action-none';
 function filterRows(rows,query){
   const q=query.trim().toLocaleLowerCase('tr-TR');
   if(!q)return rows;
@@ -245,11 +259,11 @@ function renderTable(rows){
       <td class="\${pctCls(row.weeklyChangePercent)}">\${fmtPct(row.weeklyChangePercent)}</td>
       <td class="\${pctCls(row.monthlyChangePercent)}">\${fmtPct(row.monthlyChangePercent)}</td>
       <td class="\${pctCls(row.yearlyChangePercent)}">\${fmtPct(row.yearlyChangePercent)}</td>
-      <td class="\${row.score>=75?'score-high':''}">\${row.score}</td>
-      <td class="\${cls(row.status)}">\${row.status}</td>
-      <td>\${fmt(row.stop)}</td>
-      <td>\${fmt(row.target)}</td>
-      <td>\${row.rr??'—'}</td>
+      <td class="\${row.score>=75?'score-high':''}">\${row.score??'—'}</td>
+      <td class="\${row.status==='FIRSAT'?'firsat':'bekle'}">\${row.status||'—'}</td>
+      <td class="\${actionCls(row.action)}">\${row.action||'No Alert'}</td>
+      <td>\${row.tp??'-'}</td>
+      <td>\${row.sl??'-'}</td>
       <td>\${row.rsi??'—'}</td>
       <td><button type="button" class="chart-btn" data-symbol="\${row.symbol}" title="TradingView grafik">📊 Grafik</button></td>
     </tr>\`).join(''):'<tr><td colspan="13" style="color:var(--muted);padding:24px">Sonuç bulunamadı.</td></tr>';
@@ -273,7 +287,7 @@ function openChart(symbol){
   script.async=true;
   script.text=JSON.stringify({
     autosize:true,symbol:ticker,interval:'D',timezone:'Europe/Istanbul',theme:'dark',style:'1',locale:'tr',
-    allow_symbol_change:false,support_host:'https://www.tradingview.com',backgroundColor:'#0d1b2d',gridColor:'#203952'
+    allow_symbol_change:false,support_host:'https://www.tradingview.com',backgroundColor:'#0a0a0a',gridColor:'#222222'
   });
   wrap.appendChild(script);
   container.appendChild(wrap);
@@ -331,6 +345,8 @@ app.get("/api/state", (_req, res) => {
     firsatCount: state.rows.filter((r) => r.status === "FIRSAT").length,
     xu100AboveEma50: state.xu100Regime?.xu100AboveEma50 ?? null,
     telegramEnabled: state.telegramEnabled,
+    alarmRegistered: state.alarmRegistered,
+    targets: targetsStore.load(),
   });
 });
 
@@ -342,6 +358,11 @@ async function boot() {
   });
 
   if (notifier.enabled) {
+    notifier.registerAlarmHandler({
+      setAlert: targetsStore.setAlert,
+      normalizeSymbol: targetsStore.normalizeSymbol,
+    });
+    state.alarmRegistered = true;
     try {
       state.telegramTestSent = await notifier.sendTest();
       console.log("Telegram test:", state.telegramTestSent ? "gönderildi" : "başarısız");
