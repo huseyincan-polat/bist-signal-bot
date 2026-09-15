@@ -4,7 +4,7 @@ require("dotenv").config();
 
 const express = require("express");
 const YahooFinance = require("yahoo-finance2").default;
-const yahooFinance = new YahooFinance();
+const yahooFinance = new YahooFinance({ suppressNotices: ["yahooSurvey"] });
 const { BIST_30, BENCHMARK, DISPLAY_NAMES } = require("./lib/symbols");
 const { analyzeSymbol, normalizeBars, scoreMarketRegime } = require("./lib/confluence");
 const { TelegramNotifier } = require("./lib/telegram");
