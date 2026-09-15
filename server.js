@@ -91,9 +91,13 @@ async function scanMarket() {
     state.rows = rows;
     state.lastScanAt = new Date().toISOString();
 
-    const tg = await notifier.processRows(rows);
-    if (tg.sent > 0) {
-      console.log(`Telegram: ${tg.sent} mesaj gönderildi (${tg.events.join(", ")})`);
+    try {
+      const tg = await notifier.processRows(rows);
+      if (tg.sent > 0) {
+        console.log(`Telegram: ${tg.sent} mesaj gönderildi (${tg.events.join(", ")})`);
+      }
+    } catch (err) {
+      console.error("Telegram işleme hatası:", err.message);
     }
   } catch (err) {
     state.lastError = err.message;
