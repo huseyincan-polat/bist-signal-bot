@@ -35,9 +35,13 @@ const state = {
 async function fetchQuote(symbol, retries = 3) {
   for (let attempt = 1; attempt <= retries; attempt += 1) {
     try {
-      return await yahooFinance.quote(symbol);
+      const quote = await yahooFinance.quote(symbol);
+      if (quote?.regularMarketPrice != null || quote?.regularMarketChangePercent != null) {
+        return quote;
+      }
+      return null;
     } catch (err) {
-      if (attempt === retries) throw err;
+      if (attempt === retries) return null;
       await sleep(1200 * attempt);
     }
   }
@@ -74,9 +78,19 @@ async function scanMarket() {
       try {
         const quote = await fetchQuote(symbol);
         await sleep(FETCH_DELAY_MS);
-        const dailyBars = await fetchBars(symbol, "1d");
+        let dailyBars = [];
+        let weeklyBars = [];
+        try {
+          dailyBars = await fetchBars(symbol, "1d");
+        } catch (err) {
+          if (!quote) throw err;
+        }
         await sleep(FETCH_DELAY_MS);
-        const weeklyBars = await fetchBars(symbol, "1wk");
+        try {
+          weeklyBars = await fetchBars(symbol, "1wk");
+        } catch {
+          weeklyBars = [];
+        }
         await sleep(FETCH_DELAY_MS);
         const row = analyzeSymbol({
           symbol,
@@ -97,6 +111,10 @@ async function scanMarket() {
           stop: null,
           target: null,
           rr: 0,
+          dailyChangePercent: null,
+          weeklyChangePercent: null,
+          monthlyChangePercent: null,
+          yearlyChangePercent: null,
           error: err.message,
         });
       }
