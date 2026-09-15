@@ -1,43 +1,41 @@
-# Binance Futures Sinyal Merkezi
+# BIST Confluence Swing Radar
 
-Binance USDⓈ-M perpetual futures için teknik analiz ve fırsat tarayıcısı. Uygulama yalnızca analiz ve Telegram bildirimleri üretir; **emir iletimi, broker anahtarı veya işlem API'si içermez.**
+Node.js Express scanner for BIST 30 stocks using Yahoo Finance daily/weekly OHLCV. Polls every 15 minutes, scores confluence setups (0–100), and sends Telegram alerts on FIRSAT entries and stop/target hits.
 
-## Veri mimarisi
-
-- Evren, REST erişim kısıtlamalarında dahi WebSocket'in başlayabilmesi için 50 likit USDT perpetual sözleşmeyle sabitlenmiştir.
-- Bu 50 sözleşmenin resmî `bookTicker` ve `kline_1m` / `kline_1h` akışları `wss://fstream.binance.com/ws` üzerinden JSON `SUBSCRIBE` ile asenkron tüketilir.
-- Her sembol için ~50 barlık 1m/1h tamponları bellekte tutulur; swing, ATR ve order-block bölgeleri artımlı hesaplanır.
-- REST ve WebSocket sözleşmeleri için [Binance USDⓈ-M Futures dokümantasyonu](https://developers.binance.com/docs/derivatives/usds-margined-futures) esas alınır.
-
-Kline WS akışı sessiz kalırsa 1m mumlar bookTicker fiyatlarından sentezlenir; 20 sn boyunca sessiz kalan semboller evrenden çıkarılır.
-
-Sinyal motoru, en az bir güncel WebSocket tick'i ve hazırlanmış geçmiş seri olmadan çalışmaz. Akış kesilir veya bayatlarsa panel `⚠️ REAL-TIME DATA NOT AVAILABLE` gösterir; Telegram bildirimleri kapalı kalır.
-
-## Risk filtresi
-
-Fırsatlar teyitli swing high/low pivotları ve ATR ile hesaplanır:
-
-- Long/short teknik stop girişten en fazla %3 uzak olabilir.
-- Yapısal hedefte beklenen ödül/risk en az 1:3 olmalıdır.
-- Bu koşullardan biri sağlanmazsa sonuç `BEKLE` olur ve ana fırsat tablosunda görünmez.
-
-## Çalıştırma
+## Setup
 
 ```bash
-python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
-cp .env.example .env
-.venv/bin/python -m app.main
+npm install
 ```
 
-Panel: `http://127.0.0.1:8347`
+Create `.env` (never commit):
 
-Telegram isteğe bağlıdır. `TELEGRAM_BOT_TOKEN` ve `TELEGRAM_CHAT_ID` yalnızca `.env` veya barındırma platformunun gizli ortam değişkenleri aracılığıyla verilir.
+```
+TELEGRAM_BOT_TOKEN=your_token
+TELEGRAM_CHAT_ID=your_chat_id
+```
 
-## Testler
+## Run
 
 ```bash
-.venv/bin/python -m pytest -q
+npm start
 ```
 
-Yatırım tavsiyesi değildir. Kaldıraçlı futures işlemleri yüksek risk taşır.
+Dashboard: `http://localhost:10000/`  
+Health: `GET` / `HEAD` `/health`
+
+## Confluence score (max 100)
+
+| Signal | Points |
+|--------|--------|
+| Support zone (60d cluster low or Fib 50/61.8 ±2%) | +25 |
+| EMA 50/200 hold within ±1.5% | +20 |
+| Volume ≥ 20d SMA at support | +20 |
+| Daily RSI turning up from 30–40 | +15 |
+| XU100 above EMA50 | +20 |
+
+**FIRSAT** when score ≥ 75 and risk/reward ≥ 1:2. Otherwise **BEKLE**.
+
+## Deploy (Render)
+
+Docker build runs `node server.js`. Set `PORT`, `TELEGRAM_BOT_TOKEN`, and `TELEGRAM_CHAT_ID` in Render environment variables.
