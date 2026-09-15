@@ -1,6 +1,6 @@
-# BIST Confluence Swing Radar
+# BIST ALERTS
 
-Node.js Express scanner for BIST 30 stocks using Yahoo Finance daily/weekly OHLCV. Polls every 15 minutes, scores confluence setups (0–100), and sends Telegram alerts on FIRSAT entries and stop/target hits.
+Node.js Express scanner for BIST 100 (+ ALTINS1) using Yahoo Finance daily OHLCV. Scans the full universe sequentially with 10s per-request timeouts, then waits 60s before the next pass. **FIRSAT** signals require a liquidity sweep near the 10-session low plus a 1.5× volume spike.
 
 ## Setup
 
@@ -24,17 +24,14 @@ npm start
 Dashboard: `http://localhost:10000/`  
 Health: `GET` / `HEAD` `/health`
 
-## Confluence score (max 100)
+## FIRSAT criteria
 
-| Signal | Points |
-|--------|--------|
-| Support zone (60d cluster low or Fib 50/61.8 ±2%) | +25 |
-| EMA 50/200 hold within ±1.5% | +20 |
-| Volume ≥ 20d SMA at support | +20 |
-| Daily RSI turning up from 30–40 | +15 |
-| XU100 above EMA50 | +20 |
+Both must be true:
 
-**FIRSAT** when score ≥ 75 and risk/reward ≥ 1:2. Otherwise **BEKLE**.
+1. **Liquidity sweep** — last price within 2% above the prior 10-session low, or wicked below that low and recovered
+2. **Volume** — `regularMarketVolume` ≥ 1.5× `averageDailyVolume10Day` (or 10-day volume SMA from history)
+
+Custom TP/SL via Telegram: `/alarm THYAO 320 285`
 
 ## Deploy (Render)
 

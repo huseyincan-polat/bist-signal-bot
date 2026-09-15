@@ -5,8 +5,8 @@ require("dotenv").config();
 const express = require("express");
 const YahooFinance = require("yahoo-finance2").default;
 const yahooFinance = new YahooFinance({ suppressNotices: ["yahooSurvey"] });
-const { BIST_30, BENCHMARK, DISPLAY_NAMES } = require("./lib/symbols");
-const { analyzeSymbol, normalizeBars, scoreMarketRegime } = require("./lib/confluence");
+const { BIST_100, DISPLAY_NAMES } = require("./lib/symbols");
+const { analyzeSymbol, normalizeBars } = require("./lib/confluence");
 const { TelegramNotifier } = require("./lib/telegram");
 const {
   isAltins1,
@@ -20,8 +20,18 @@ const PORT = Number(process.env.PORT || 10000);
 const POLL_MS = 60 * 1000;
 const HISTORY_DAYS = 400;
 const FETCH_DELAY_MS = 350;
+const REQUEST_TIMEOUT_MS = 10 * 1000;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+function withTimeout(promise, ms, label = "request") {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      setTimeout(() => reject(new Error(`${label} timeout`)), ms);
+    }),
+  ]);
+}
 
 targetsStore.init();
 
@@ -36,89 +46,73 @@ const state = {
   lastScanAt: null,
   lastError: null,
   scanning: false,
-  xu100Regime: null,
+  scannedCount: 0,
+  universeCount: BIST_100.length,
   telegramEnabled: notifier.enabled,
   alarmRegistered: false,
   telegramTestSent: false,
 };
 
-async function fetchQuote(symbol, retries = 3) {
-  for (let attempt = 1; attempt <= retries; attempt += 1) {
-    try {
-      const quote = await yahooFinance.quote(symbol);
-      if (quote?.regularMarketPrice != null || quote?.regularMarketChangePercent != null) {
-        return quote;
-      }
-      return null;
-    } catch (err) {
-      if (attempt === retries) return null;
-      await sleep(1200 * attempt);
+let scanLoopTimer = null;
+
+async function fetchQuote(symbol) {
+  try {
+    const quote = await withTimeout(yahooFinance.quote(symbol), REQUEST_TIMEOUT_MS, `quote:${symbol}`);
+    if (quote?.regularMarketPrice != null || quote?.regularMarketChangePercent != null) {
+      return quote;
     }
+    return null;
+  } catch {
+    return null;
   }
-  return null;
 }
 
-async function fetchBars(symbol, interval, retries = 3) {
+async function fetchBars(symbol, interval) {
   const period1 = new Date(Date.now() - HISTORY_DAYS * 24 * 60 * 60 * 1000);
-  for (let attempt = 1; attempt <= retries; attempt += 1) {
+  const result = await withTimeout(
+    yahooFinance.chart(symbol, { period1, interval }),
+    REQUEST_TIMEOUT_MS,
+    `chart:${symbol}`,
+  );
+  return normalizeBars(result.quotes);
+}
+
+async function scanSymbol(symbol) {
+  let quote = null;
+  let dailyBars = [];
+
+  if (isAltins1(symbol)) {
+    const scraped = await withTimeout(fetchAltins1Quote(), REQUEST_TIMEOUT_MS, "altins1-scrape");
+    quote = toYahooQuoteShape(scraped);
+  } else {
+    quote = await fetchQuote(symbol);
+    await sleep(FETCH_DELAY_MS);
     try {
-      const result = await yahooFinance.chart(symbol, { period1, interval });
-      return normalizeBars(result.quotes);
+      dailyBars = await fetchBars(symbol, "1d");
     } catch (err) {
-      if (attempt === retries) throw err;
-      await sleep(1200 * attempt);
+      if (!quote) throw err;
     }
+    await sleep(FETCH_DELAY_MS);
   }
-  return [];
+
+  const row = analyzeSymbol({ symbol, dailyBars, quote });
+  row.name = DISPLAY_NAMES[symbol] || symbol;
+  if (quote?.sourceUrl) row.dataSource = quote.sourceUrl;
+  return row;
 }
 
 async function scanMarket() {
   if (state.scanning) return;
   state.scanning = true;
   state.lastError = null;
+  state.scannedCount = 0;
 
   try {
-    const xuDaily = await fetchBars(BENCHMARK, "1d");
-    await sleep(FETCH_DELAY_MS);
-    const marketRegime = scoreMarketRegime(xuDaily);
-    state.xu100Regime = marketRegime;
-
     const rows = [];
-    for (const symbol of BIST_30) {
+
+    for (const symbol of BIST_100) {
       try {
-        let quote = null;
-        let dailyBars = [];
-        let weeklyBars = [];
-
-        if (isAltins1(symbol)) {
-          const scraped = await fetchAltins1Quote();
-          quote = toYahooQuoteShape(scraped);
-        } else {
-          quote = await fetchQuote(symbol);
-          await sleep(FETCH_DELAY_MS);
-          try {
-            dailyBars = await fetchBars(symbol, "1d");
-          } catch (err) {
-            if (!quote) throw err;
-          }
-          await sleep(FETCH_DELAY_MS);
-          try {
-            weeklyBars = await fetchBars(symbol, "1wk");
-          } catch {
-            weeklyBars = [];
-          }
-          await sleep(FETCH_DELAY_MS);
-        }
-
-        const row = analyzeSymbol({
-          symbol,
-          dailyBars,
-          weeklyBars,
-          marketRegime,
-          quote,
-        });
-        row.name = DISPLAY_NAMES[symbol] || symbol;
-        if (quote?.sourceUrl) row.dataSource = quote.sourceUrl;
+        const row = await scanSymbol(symbol);
         rows.push(row);
       } catch (err) {
         rows.push({
@@ -127,6 +121,7 @@ async function scanMarket() {
           price: null,
           score: 0,
           status: "BEKLE",
+          action: "—",
           dailyChangePercent: null,
           weeklyChangePercent: null,
           monthlyChangePercent: null,
@@ -134,14 +129,20 @@ async function scanMarket() {
           error: err.message,
         });
       }
+      state.scannedCount += 1;
     }
 
-    rows.sort((a, b) => b.score - a.score);
+    rows.sort((a, b) => {
+      if (a.status === "FIRSAT" && b.status !== "FIRSAT") return -1;
+      if (b.status === "FIRSAT" && a.status !== "FIRSAT") return 1;
+      return b.score - a.score;
+    });
 
     const targets = targetsStore.load();
     const enriched = rows.map((row) => enrichRow(row, targets));
     state.rows = enriched;
     state.lastScanAt = new Date().toISOString();
+    state.universeCount = BIST_100.length;
 
     const triggerEvents = collectTriggerEvents(enriched);
     for (const event of triggerEvents) {
@@ -161,22 +162,30 @@ async function scanMarket() {
     console.error("Tarama hatası:", err.message);
   } finally {
     state.scanning = false;
+    scheduleNextScan();
   }
+}
+
+function scheduleNextScan() {
+  if (scanLoopTimer) clearTimeout(scanLoopTimer);
+  scanLoopTimer = setTimeout(() => {
+    scanMarket().catch((err) => console.error("Tarama döngüsü hatası:", err.message));
+  }, POLL_MS);
 }
 
 function dashboardHtml() {
   return `<!DOCTYPE html>
 <html lang="tr"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>BIST SMC Alerts</title>
+<title>BIST ALERTS</title>
 <style>
 :root{--bg:#0a0a0a;--panel:#111;--line:#222;--ink:#d8d8d8;--muted:#666;--green:#00C851;--red:#ff4444;--gray:#888;--pct-up:#00C851;--pct-down:#ff4444}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--ink);font:13px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;min-height:100vh;display:flex;flex-direction:column}
 main{flex:1;max-width:1680px;margin:0 auto;padding:20px;width:100%}
+h1{font-size:18px;letter-spacing:.18em;text-transform:uppercase;color:#fff;margin:0 0 6px}
 .brand{font-size:12px;letter-spacing:.22em;text-transform:uppercase;color:#9ef01a;margin-bottom:18px}
 .brand span{color:#fff;font-weight:700}
-.system-line{color:var(--muted);margin:0 0 18px;font-size:12px}
 .meta{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px}
 .pill{background:var(--panel);border:1px solid var(--line);padding:8px 10px;font-size:11px}
 .pill strong{display:block;font-size:13px;margin-top:4px;color:#fff}
@@ -190,8 +199,8 @@ td{padding:10px;border-bottom:1px solid #1a1a1a;white-space:nowrap}
 tr:last-child td{border:0}
 .score-high{color:var(--green);font-weight:700}
 .pct-up{color:var(--pct-up)}.pct-down{color:var(--pct-down)}
-.action-watch{color:var(--gray)}.action-tp{color:var(--green);font-weight:700}
-.action-sl{color:var(--red);font-weight:700}.action-none{color:var(--muted)}
+.action-firsat{color:#39ff14;font-weight:700;text-shadow:0 0 8px rgba(57,255,20,.45)}
+.action-none{color:var(--muted)}
 .firsat{color:var(--green)}.bekle{color:var(--gray)}
 .chart-btn{border:1px solid var(--line);background:#0a0a0a;color:var(--ink);padding:5px 8px;cursor:pointer;font:inherit}
 .chart-btn:hover{border-color:#9ef01a;color:#9ef01a}
@@ -206,11 +215,11 @@ footer{margin-top:auto;padding:14px 20px;border-top:1px solid var(--line);text-a
 @media(max-width:700px){main{padding:12px}#searchInput{max-width:100%}}
 </style></head><body>
 <main>
+  <h1>BIST ALERTS</h1>
   <div class="brand">Powered By <span>Can Polat</span></div>
-  <p class="system-line">[ System: BIST 1m Loop | Custom SMC Alerts ]</p>
   <div class="meta">
     <div class="pill">Son Tarama (15 dk gecikmeli)<strong id="scan">—</strong></div>
-    <div class="pill">XU100 rejim<strong id="regime">—</strong></div>
+    <div class="pill">TARANAN HİSSE<strong id="scanned-count">—</strong></div>
     <div class="pill">FIRSAT<strong id="firsat-count">—</strong></div>
     <div class="pill">Tarama<strong id="status">—</strong></div>
   </div>
@@ -239,11 +248,12 @@ footer{margin-top:auto;padding:14px 20px;border-top:1px solid var(--line);text-a
 <footer role="contentinfo">Hüseyin Can Polat tarafından yapılmıştır</footer>
 <script>
 let allRows=[];
+let renderTimer=null;
 const fmt=n=>n==null||n==='-'?'—':Number(n).toLocaleString('tr-TR',{minimumFractionDigits:2,maximumFractionDigits:2});
 const fmtPct=v=>{if(v==null||Number.isNaN(v))return'—';const sign=v>=0?'+':'';return sign+Number(v).toFixed(2)+'%'};
 const pctCls=v=>v==null?'':v>=0?'pct-up':'pct-down';
 const tvSymbol=s=>('BIST:'+(s||'').replace('.IS',''));
-const actionCls=a=>a==='Take Profit'?'action-tp':a==='Stop Loss'?'action-sl':a==='Watch'?'action-watch':'action-none';
+const actionCls=a=>a==='FIRSAT'?'action-firsat':'action-none';
 function filterRows(rows,query){
   const q=query.trim().toLocaleLowerCase('tr-TR');
   if(!q)return rows;
@@ -261,7 +271,7 @@ function renderTable(rows){
       <td class="\${pctCls(row.yearlyChangePercent)}">\${fmtPct(row.yearlyChangePercent)}</td>
       <td class="\${row.score>=75?'score-high':''}">\${row.score??'—'}</td>
       <td class="\${row.status==='FIRSAT'?'firsat':'bekle'}">\${row.status||'—'}</td>
-      <td class="\${actionCls(row.action)}">\${row.action||'No Alert'}</td>
+      <td class="\${actionCls(row.action)}">\${row.action||'—'}</td>
       <td>\${row.tp??'-'}</td>
       <td>\${row.sl??'-'}</td>
       <td>\${row.rsi??'—'}</td>
@@ -306,16 +316,29 @@ document.getElementById('rows').onclick=e=>{
 document.getElementById('searchInput').oninput=e=>{
   renderTable(filterRows(allRows,e.target.value));
 };
-async function render(){
-  const r=await fetch('/api/state');const s=await r.json();
-  document.getElementById('scan').textContent=s.lastScanAt?new Date(s.lastScanAt).toLocaleString('tr-TR'):'—';
-  document.getElementById('regime').textContent=s.xu100AboveEma50?'EMA50 ÜSTÜ':'EMA50 ALTINDA';
-  document.getElementById('firsat-count').textContent=s.firsatCount;
-  document.getElementById('status').textContent=s.scanning?'TARANIYOR':'HAZIR';
-  allRows=s.rows||[];
-  renderTable(filterRows(allRows,document.getElementById('searchInput').value));
+function scheduleRender(delay){
+  if(renderTimer)clearTimeout(renderTimer);
+  renderTimer=setTimeout(render,delay);
 }
-render();setInterval(render,30000);
+async function render(){
+  let delay=30000;
+  try{
+    const r=await fetch('/api/state');
+    if(!r.ok)throw new Error('fetch failed');
+    const s=await r.json();
+    document.getElementById('scan').textContent=s.lastScanAt?new Date(s.lastScanAt).toLocaleString('tr-TR'):'—';
+    document.getElementById('scanned-count').textContent=s.scannedCount??s.universeCount??'—';
+    document.getElementById('firsat-count').textContent=s.firsatCount;
+    document.getElementById('status').textContent=s.scanning?'TARANIYOR':'HAZIR';
+    allRows=s.rows||[];
+    renderTable(filterRows(allRows,document.getElementById('searchInput').value));
+  }catch{
+    document.getElementById('status').textContent='BAĞLANTI BEKLENİYOR...';
+    delay=10000;
+  }
+  scheduleRender(delay);
+}
+render();
 </script></body></html>`;
 }
 
@@ -341,9 +364,10 @@ app.get("/api/state", (_req, res) => {
     lastScanAt: state.lastScanAt,
     lastError: state.lastError,
     scanning: state.scanning,
+    scannedCount: state.scannedCount || state.rows.length,
+    universeCount: state.universeCount,
     pollIntervalMs: POLL_MS,
     firsatCount: state.rows.filter((r) => r.status === "FIRSAT").length,
-    xu100AboveEma50: state.xu100Regime?.xu100AboveEma50 ?? null,
     telegramEnabled: state.telegramEnabled,
     alarmRegistered: state.alarmRegistered,
     targets: targetsStore.load(),
@@ -351,7 +375,7 @@ app.get("/api/state", (_req, res) => {
 });
 
 async function boot() {
-  console.log("BIST Confluence Swing Radar başlatılıyor…");
+  console.log("BIST ALERTS radar başlatılıyor…");
 
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`Sunucu http://0.0.0.0:${PORT} adresinde dinliyor`);
@@ -374,7 +398,6 @@ async function boot() {
   }
 
   await scanMarket();
-  setInterval(scanMarket, POLL_MS);
 }
 
 boot().catch((err) => {
