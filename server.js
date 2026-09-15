@@ -407,6 +407,8 @@ async function boot() {
   if (notifier.enabled) {
     notifier.registerAlarmHandler({
       setAlert: targetsStore.setAlert,
+      listAlerts: targetsStore.listAlerts,
+      removeAlert: targetsStore.removeAlert,
       normalizeSymbol: targetsStore.normalizeSymbol,
     });
     state.alarmRegistered = true;
