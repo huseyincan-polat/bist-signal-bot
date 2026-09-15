@@ -15,6 +15,7 @@ const {
 } = require("./lib/altins1-scraper");
 const targetsStore = require("./lib/targets");
 const { enrichRow, collectTriggerEvents } = require("./lib/alerts");
+const { isMarketOpen } = require("./lib/market-hours");
 
 const PORT = Number(process.env.PORT || 10000);
 const POLL_MS = 60 * 1000;
@@ -48,6 +49,7 @@ const state = {
   scanning: false,
   scannedCount: 0,
   universeCount: BIST_100.length,
+  marketOpen: isMarketOpen(),
   telegramEnabled: notifier.enabled,
   alarmRegistered: false,
   telegramTestSent: false,
@@ -162,15 +164,27 @@ async function scanMarket() {
     console.error("Tarama hatası:", err.message);
   } finally {
     state.scanning = false;
-    scheduleNextScan();
   }
 }
 
-function scheduleNextScan() {
+function scheduleNextLoop() {
   if (scanLoopTimer) clearTimeout(scanLoopTimer);
   scanLoopTimer = setTimeout(() => {
-    scanMarket().catch((err) => console.error("Tarama döngüsü hatası:", err.message));
+    scanLoop().catch((err) => console.error("Tarama döngüsü hatası:", err.message));
   }, POLL_MS);
+}
+
+async function scanLoop() {
+  state.marketOpen = isMarketOpen();
+
+  if (!state.marketOpen) {
+    console.log("Piyasa kapalı, veri çekilmiyor");
+    scheduleNextLoop();
+    return;
+  }
+
+  await scanMarket();
+  scheduleNextLoop();
 }
 
 function dashboardHtml() {
@@ -329,7 +343,12 @@ async function render(){
     document.getElementById('scan').textContent=s.lastScanAt?new Date(s.lastScanAt).toLocaleString('tr-TR'):'—';
     document.getElementById('scanned-count').textContent=s.scannedCount??s.universeCount??'—';
     document.getElementById('firsat-count').textContent=s.firsatCount;
-    document.getElementById('status').textContent=s.scanning?'TARANIYOR':'HAZIR';
+    const statusEl=document.getElementById('status');
+    if(s.marketOpen===false){
+      statusEl.textContent='PİYASA KAPALI - UYKUDA';
+    }else{
+      statusEl.textContent=s.scanning?'TARANIYOR':'HAZIR';
+    }
     allRows=s.rows||[];
     renderTable(filterRows(allRows,document.getElementById('searchInput').value));
   }catch{
@@ -359,11 +378,15 @@ app.get("/", (_req, res) => {
 });
 
 app.get("/api/state", (_req, res) => {
+  const marketOpen = isMarketOpen();
+  state.marketOpen = marketOpen;
+
   res.json({
     rows: state.rows,
     lastScanAt: state.lastScanAt,
     lastError: state.lastError,
     scanning: state.scanning,
+    marketOpen,
     scannedCount: state.scannedCount || state.rows.length,
     universeCount: state.universeCount,
     pollIntervalMs: POLL_MS,
@@ -397,7 +420,7 @@ async function boot() {
     console.log("Telegram devre dışı (TOKEN/CHAT_ID eksik)");
   }
 
-  await scanMarket();
+  await scanLoop();
 }
 
 boot().catch((err) => {

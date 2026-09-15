@@ -1,6 +1,6 @@
 # BIST ALERTS
 
-Node.js Express scanner for BIST 100 (+ ALTINS1) using Yahoo Finance daily OHLCV. Scans the full universe sequentially with 10s per-request timeouts, then waits 60s before the next pass. **FIRSAT** signals require a liquidity sweep near the 10-session low plus a 1.5× volume spike.
+Node.js Express scanner for BIST 100 (+ ALTINS1) using Yahoo Finance daily OHLCV. Scans the full universe sequentially with 10s per-request timeouts, then waits 60s before the next pass. Outbound fetches run only during BIST hours (**Mon–Fri 09:55–18:10 Europe/Istanbul**); outside that window the loop sleeps with zero API/scrape calls. **FIRSAT** signals require a liquidity sweep near the 10-session low plus a 1.5× volume spike.
 
 ## Setup
 
