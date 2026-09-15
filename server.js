@@ -163,7 +163,7 @@ footer{margin-top:auto;padding:18px 24px;border-top:1px solid var(--line);backgr
   <h1>BIST Confluence Swing Radar</h1>
   <p class="sub">Yahoo Finance günlük/haftalık veri · 1 dk tarama · Skor ≥75 + R/R ≥1:2 → FIRSAT</p>
   <div class="meta">
-    <div class="pill">Son tarama<strong id="scan">—</strong></div>
+    <div class="pill">Son Tarama (15 dk gecikmeli)<strong id="scan">—</strong></div>
     <div class="pill">XU100 rejim<strong id="regime">—</strong></div>
     <div class="pill">FIRSAT<strong id="firsat-count">—</strong></div>
     <div class="pill">Tarama<strong id="status">—</strong></div>
