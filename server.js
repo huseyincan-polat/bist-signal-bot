@@ -8,6 +8,11 @@ const yahooFinance = new YahooFinance({ suppressNotices: ["yahooSurvey"] });
 const { BIST_30, BENCHMARK, DISPLAY_NAMES } = require("./lib/symbols");
 const { analyzeSymbol, normalizeBars, scoreMarketRegime } = require("./lib/confluence");
 const { TelegramNotifier } = require("./lib/telegram");
+const {
+  isAltins1,
+  fetchAltins1Quote,
+  toYahooQuoteShape,
+} = require("./lib/altins1-scraper");
 
 const PORT = Number(process.env.PORT || 10000);
 const POLL_MS = 60 * 1000;
@@ -76,22 +81,30 @@ async function scanMarket() {
     const rows = [];
     for (const symbol of BIST_30) {
       try {
-        const quote = await fetchQuote(symbol);
-        await sleep(FETCH_DELAY_MS);
+        let quote = null;
         let dailyBars = [];
         let weeklyBars = [];
-        try {
-          dailyBars = await fetchBars(symbol, "1d");
-        } catch (err) {
-          if (!quote) throw err;
+
+        if (isAltins1(symbol)) {
+          const scraped = await fetchAltins1Quote();
+          quote = toYahooQuoteShape(scraped);
+        } else {
+          quote = await fetchQuote(symbol);
+          await sleep(FETCH_DELAY_MS);
+          try {
+            dailyBars = await fetchBars(symbol, "1d");
+          } catch (err) {
+            if (!quote) throw err;
+          }
+          await sleep(FETCH_DELAY_MS);
+          try {
+            weeklyBars = await fetchBars(symbol, "1wk");
+          } catch {
+            weeklyBars = [];
+          }
+          await sleep(FETCH_DELAY_MS);
         }
-        await sleep(FETCH_DELAY_MS);
-        try {
-          weeklyBars = await fetchBars(symbol, "1wk");
-        } catch {
-          weeklyBars = [];
-        }
-        await sleep(FETCH_DELAY_MS);
+
         const row = analyzeSymbol({
           symbol,
           dailyBars,
@@ -100,6 +113,7 @@ async function scanMarket() {
           quote,
         });
         row.name = DISPLAY_NAMES[symbol] || symbol;
+        if (quote?.sourceUrl) row.dataSource = quote.sourceUrl;
         rows.push(row);
       } catch (err) {
         rows.push({
