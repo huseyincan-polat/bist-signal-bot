@@ -10,7 +10,7 @@ const { analyzeSymbol, normalizeBars, scoreMarketRegime } = require("./lib/confl
 const { TelegramNotifier } = require("./lib/telegram");
 
 const PORT = Number(process.env.PORT || 10000);
-const POLL_MS = 5 * 60 * 1000;
+const POLL_MS = 60 * 1000;
 const HISTORY_DAYS = 400;
 const FETCH_DELAY_MS = 350;
 
@@ -31,6 +31,18 @@ const state = {
   telegramEnabled: notifier.enabled,
   telegramTestSent: false,
 };
+
+async function fetchQuote(symbol, retries = 3) {
+  for (let attempt = 1; attempt <= retries; attempt += 1) {
+    try {
+      return await yahooFinance.quote(symbol);
+    } catch (err) {
+      if (attempt === retries) throw err;
+      await sleep(1200 * attempt);
+    }
+  }
+  return null;
+}
 
 async function fetchBars(symbol, interval, retries = 3) {
   const period1 = new Date(Date.now() - HISTORY_DAYS * 24 * 60 * 60 * 1000);
@@ -60,6 +72,8 @@ async function scanMarket() {
     const rows = [];
     for (const symbol of BIST_30) {
       try {
+        const quote = await fetchQuote(symbol);
+        await sleep(FETCH_DELAY_MS);
         const dailyBars = await fetchBars(symbol, "1d");
         await sleep(FETCH_DELAY_MS);
         const weeklyBars = await fetchBars(symbol, "1wk");
@@ -69,6 +83,7 @@ async function scanMarket() {
           dailyBars,
           weeklyBars,
           marketRegime,
+          quote,
         });
         row.name = DISPLAY_NAMES[symbol] || symbol;
         rows.push(row);
@@ -146,7 +161,7 @@ footer{margin-top:auto;padding:18px 24px;border-top:1px solid var(--line);backgr
 </style></head><body>
 <main>
   <h1>BIST Confluence Swing Radar</h1>
-  <p class="sub">Yahoo Finance günlük/haftalık veri · 5 dk tarama · Skor ≥75 + R/R ≥1:2 → FIRSAT</p>
+  <p class="sub">Yahoo Finance günlük/haftalık veri · 1 dk tarama · Skor ≥75 + R/R ≥1:2 → FIRSAT</p>
   <div class="meta">
     <div class="pill">Son tarama<strong id="scan">—</strong></div>
     <div class="pill">XU100 rejim<strong id="regime">—</strong></div>
