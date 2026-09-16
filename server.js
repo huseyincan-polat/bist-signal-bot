@@ -16,6 +16,7 @@ const {
 const targetsStore = require("./lib/targets");
 const { enrichRow, collectTriggerEvents } = require("./lib/alerts");
 const { isMarketOpen } = require("./lib/market-hours");
+const { normalizeDailyChangePercent } = require("./lib/indicators");
 
 const PORT = Number(process.env.PORT || 10000);
 const POLL_MS = 60 * 1000;
@@ -100,6 +101,9 @@ async function scanSymbol(symbol) {
   const row = analyzeSymbol({ symbol, dailyBars, quote });
   row.name = DISPLAY_NAMES[symbol] || symbol;
   if (quote?.sourceUrl) row.dataSource = quote.sourceUrl;
+  if (row.dailyChangePercent == null && quote?.regularMarketChangePercent != null) {
+    row.dailyChangePercent = normalizeDailyChangePercent(quote.regularMarketChangePercent);
+  }
   return row;
 }
 
@@ -264,8 +268,15 @@ footer{margin-top:auto;padding:14px 20px;border-top:1px solid var(--line);text-a
 let allRows=[];
 let renderTimer=null;
 const fmt=n=>n==null||n==='-'?'—':Number(n).toLocaleString('tr-TR',{minimumFractionDigits:2,maximumFractionDigits:2});
-const fmtPct=v=>{if(v==null||Number.isNaN(v))return'—';const sign=v>=0?'+':'';return sign+Number(v).toFixed(2)+'%'};
-const pctCls=v=>v==null?'':v>=0?'pct-up':'pct-down';
+const fmtPct=v=>{
+  if(v==null||!Number.isFinite(Number(v)))return'—';
+  const n=Number(v);
+  const body=Math.abs(n).toLocaleString('tr-TR',{minimumFractionDigits:2,maximumFractionDigits:2});
+  if(n>0)return '+'+body+'%';
+  if(n<0)return '-'+body+'%';
+  return body+'%';
+};
+const pctCls=v=>v==null||!Number.isFinite(Number(v))?'':Number(v)>=0?'pct-up':'pct-down';
 const tvSymbol=s=>('BIST:'+(s||'').replace('.IS',''));
 const actionCls=a=>a==='FIRSAT'?'action-firsat':'action-none';
 function filterRows(rows,query){
