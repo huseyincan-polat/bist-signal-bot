@@ -5,8 +5,8 @@ require("dotenv").config();
 const express = require("express");
 const YahooFinance = require("yahoo-finance2").default;
 const yahooFinance = new YahooFinance({ suppressNotices: ["yahooSurvey"] });
-const { BIST_100, DISPLAY_NAMES } = require("./lib/symbols");
-const { analyzeSymbol, normalizeBars } = require("./lib/confluence");
+const { BIST_100, BENCHMARK, DISPLAY_NAMES } = require("./lib/symbols");
+const { analyzeSymbol, normalizeBars, computeMarketContext } = require("./lib/confluence");
 const { TelegramNotifier } = require("./lib/telegram");
 const {
   isAltins1,
@@ -80,7 +80,7 @@ async function fetchBars(symbol, interval) {
   return normalizeBars(result.quotes);
 }
 
-async function scanSymbol(symbol) {
+async function scanSymbol(symbol, marketContext) {
   let quote = null;
   let dailyBars = [];
 
@@ -98,7 +98,7 @@ async function scanSymbol(symbol) {
     await sleep(FETCH_DELAY_MS);
   }
 
-  const row = analyzeSymbol({ symbol, dailyBars, quote });
+  const row = analyzeSymbol({ symbol, dailyBars, quote, marketContext });
   row.name = DISPLAY_NAMES[symbol] || symbol;
   if (quote?.sourceUrl) row.dataSource = quote.sourceUrl;
   if (row.dailyChangePercent == null && quote?.regularMarketChangePercent != null) {
@@ -115,10 +115,19 @@ async function scanMarket() {
 
   try {
     const rows = [];
+    let marketContext = { xu100AboveEma50: false, xu100Return10d: null };
+
+    try {
+      const xuDaily = await fetchBars(BENCHMARK, "1d");
+      marketContext = computeMarketContext(xuDaily);
+      await sleep(FETCH_DELAY_MS);
+    } catch (err) {
+      console.error("XU100 rejim verisi alınamadı:", err.message);
+    }
 
     for (const symbol of BIST_100) {
       try {
-        const row = await scanSymbol(symbol);
+        const row = await scanSymbol(symbol, marketContext);
         rows.push(row);
       } catch (err) {
         rows.push({
