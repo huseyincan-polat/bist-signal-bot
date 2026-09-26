@@ -51,6 +51,7 @@ const state = {
   scannedCount: 0,
   universeCount: BIST_100.length,
   marketOpen: isMarketOpen(),
+  xu100AboveEma50: null,
   telegramEnabled: notifier.enabled,
   alarmRegistered: false,
   telegramTestSent: false,
@@ -120,9 +121,11 @@ async function scanMarket() {
     try {
       const xuDaily = await fetchBars(BENCHMARK, "1d");
       marketContext = computeMarketContext(xuDaily);
+      state.xu100AboveEma50 = marketContext.xu100AboveEma50;
       await sleep(FETCH_DELAY_MS);
     } catch (err) {
       console.error("XU100 rejim verisi alınamadı:", err.message);
+      state.xu100AboveEma50 = false;
     }
 
     for (const symbol of BIST_100) {
@@ -147,9 +150,15 @@ async function scanMarket() {
       state.scannedCount += 1;
     }
 
+    const statusRank = (status) => {
+      if (status === "FIRSAT") return 0;
+      if (status === "DİKKAT") return 1;
+      return 2;
+    };
+
     rows.sort((a, b) => {
-      if (a.status === "FIRSAT" && b.status !== "FIRSAT") return -1;
-      if (b.status === "FIRSAT" && a.status !== "FIRSAT") return 1;
+      const rankDiff = statusRank(a.status) - statusRank(b.status);
+      if (rankDiff !== 0) return rankDiff;
       return b.score - a.score;
     });
 
@@ -227,8 +236,9 @@ tr:last-child td{border:0}
 .score-high{color:var(--green);font-weight:700}
 .pct-up{color:var(--pct-up)}.pct-down{color:var(--pct-down)}
 .action-firsat{color:#39ff14;font-weight:700;text-shadow:0 0 8px rgba(57,255,20,.45)}
+.action-dikkat{color:#ffb020;font-weight:700}
 .action-none{color:var(--muted)}
-.firsat{color:var(--green)}.bekle{color:var(--gray)}
+.firsat{color:var(--green)}.dikkat{color:#ffb020}.bekle{color:var(--gray)}
 .chart-btn{border:1px solid var(--line);background:#0a0a0a;color:var(--ink);padding:5px 8px;cursor:pointer;font:inherit}
 .chart-btn:hover{border-color:#9ef01a;color:#9ef01a}
 .modal{position:fixed;inset:0;background:rgba(0,0,0,.82);display:none;align-items:center;justify-content:center;z-index:1000;padding:20px}
@@ -248,6 +258,7 @@ footer{margin-top:auto;padding:14px 20px;border-top:1px solid var(--line);text-a
     <div class="pill">Son Tarama (15 dk gecikmeli)<strong id="scan">—</strong></div>
     <div class="pill">TARANAN HİSSE<strong id="scanned-count">—</strong></div>
     <div class="pill">FIRSAT<strong id="firsat-count">—</strong></div>
+    <div class="pill">DİKKAT<strong id="dikkat-count">—</strong></div>
     <div class="pill">Tarama<strong id="status">—</strong></div>
   </div>
   <div class="search-wrap">
@@ -287,7 +298,14 @@ const fmtPct=v=>{
 };
 const pctCls=v=>v==null||!Number.isFinite(Number(v))?'':Number(v)>=0?'pct-up':'pct-down';
 const tvSymbol=s=>('BIST:'+(s||'').replace('.IS',''));
-const actionCls=a=>a==='FIRSAT'?'action-firsat':'action-none';
+const actionCls=a=>a==='FIRSAT'?'action-firsat':a==='DİKKAT'?'action-dikkat':'action-none';
+const signalCls=s=>s==='FIRSAT'?'firsat':s==='DİKKAT'?'dikkat':'bekle';
+const actionLabel=row=>{
+  if(row.action==='DİKKAT'&&row.statusReason){
+    return row.action+'<br><small style="color:#ffb020">'+row.statusReason+'</small>';
+  }
+  return row.action||'—';
+};
 function filterRows(rows,query){
   const q=query.trim().toLocaleLowerCase('tr-TR');
   if(!q)return rows;
@@ -304,8 +322,8 @@ function renderTable(rows){
       <td class="\${pctCls(row.monthlyChangePercent)}">\${fmtPct(row.monthlyChangePercent)}</td>
       <td class="\${pctCls(row.yearlyChangePercent)}">\${fmtPct(row.yearlyChangePercent)}</td>
       <td class="\${row.score>=75?'score-high':''}">\${row.score??'—'}</td>
-      <td class="\${row.status==='FIRSAT'?'firsat':'bekle'}">\${row.status||'—'}</td>
-      <td class="\${actionCls(row.action)}">\${row.action||'—'}</td>
+      <td class="\${signalCls(row.status)}">\${row.status||'—'}</td>
+      <td class="\${actionCls(row.action)}">\${actionLabel(row)}</td>
       <td>\${row.tp??'-'}</td>
       <td>\${row.sl??'-'}</td>
       <td>\${row.rsi??'—'}</td>
@@ -363,6 +381,7 @@ async function render(){
     document.getElementById('scan').textContent=s.lastScanAt?new Date(s.lastScanAt).toLocaleString('tr-TR'):'—';
     document.getElementById('scanned-count').textContent=s.scannedCount??s.universeCount??'—';
     document.getElementById('firsat-count').textContent=s.firsatCount;
+    document.getElementById('dikkat-count').textContent=s.dikkatCount??'—';
     const statusEl=document.getElementById('status');
     if(s.marketOpen===false){
       statusEl.textContent='PİYASA KAPALI - UYKUDA';
@@ -411,6 +430,8 @@ app.get("/api/state", (_req, res) => {
     universeCount: state.universeCount,
     pollIntervalMs: POLL_MS,
     firsatCount: state.rows.filter((r) => r.status === "FIRSAT").length,
+    dikkatCount: state.rows.filter((r) => r.status === "DİKKAT").length,
+    xu100AboveEma50: state.xu100AboveEma50,
     telegramEnabled: state.telegramEnabled,
     alarmRegistered: state.alarmRegistered,
     targets: targetsStore.load(),
