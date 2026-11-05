@@ -16,7 +16,7 @@ Aşağıdakilerin hepsi doğru olmalı:
 2. **Trend:** Fiyat EMA20 ve EMA50'nin üstünde, iki ortalama da yukarı eğimli olmalı. Son 20 günde daha yüksek tepe ve daha yüksek dip görülmeli.
 3. **Tetik:** Fiyat 20 günlük direnci ya da önceki günün en yükseğini kırmalı. Aynı anda şunlar da sağlanmalı:
    - **Hacim:** Bugünkü hacim, önceki 20 günün ortalamasının *günün o saatine kadar beklenen kısmından* büyük olmalı.
-   - **RSI(14):** Wilder RSI 50 ile 70 arasında olmalı. Bu şart `REQUIRE_RSI_MOMENTUM=false` ile kapatılabilir.
+   - **RSI(14) (isteğe bağlı, varsayılan kapalı):** `REQUIRE_RSI_MOMENTUM=true` ayarlanırsa Wilder RSI 50 ile 70 arasında olmalı. Backtest'te bu şart sonuçları iyileştirmedi.
 4. **Kazanç/risk** en az `MIN_RR` (2) olmalı.
 5. Ortak filtrelerden geçmeli (aşağıda).
 
@@ -127,9 +127,9 @@ npm run backtest -- --variants C,D --csv sonuc.csv
 |---|---|
 | A | Eski kurallar: 10 günlük güç, RSI 50–70, filtre yok |
 | B | 63 günlük güç, RSI şartı yok, filtre yok |
-| C | Yeni varsayılan FIRSAT: 63 günlük güç, RSI şartı, beta, likidite ve veri filtresi |
+| C | 63 günlük güç, RSI şartı, beta, likidite ve veri filtresi |
 | D | C + DÖNÜŞ modu |
-| E | C, ama RSI 50–70 şartı yok |
+| E | **Varsayılan FIRSAT:** C, ama RSI 50–70 şartı yok |
 
 Backtest'in varsayımları:
 - İşleme sinyalden sonraki günün açılışında girilir.
@@ -147,6 +147,7 @@ Backtest'in varsayımları:
 | A (eski) | 460 | 45,9 | 0,68 | 1,10 | −1097 |
 | B | 478 | 50,8 | 3,61 | 1,61 | −459 |
 | C | 335 | 51,3 | 3,28 | 1,59 | −352 |
+| **E (varsayılan)** | 471 | 51,0 | 3,76 | 1,64 | −436 |
 | D-DÖNÜŞ | 832 | 38,8 | 0,03 | 1,01 | −1843 |
 
 Test, bugünkü BIST 100 listesiyle yapıldı. Dönem içinde iyi gidip endekse giren hisseler listede olduğu için sonuçlar olduğundan iyi görünebilir (hayatta kalma yanlılığı).
