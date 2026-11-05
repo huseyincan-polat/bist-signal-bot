@@ -1,10 +1,12 @@
 {
   "name": "bist-signal-bot",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "BIST confluence swing radar — Yahoo Finance polling, Telegram alerts",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "test": "node --test",
+    "backtest": "node scripts/backtest.js"
   },
   "engines": {
     "node": ">=20"

@@ -15,7 +15,13 @@ const {
 } = require("./lib/altins1-scraper");
 const targetsStore = require("./lib/targets");
 const { enrichRow, collectTriggerEvents } = require("./lib/alerts");
-const { isMarketOpen } = require("./lib/market-hours");
+const {
+  isMarketOpen,
+  expectedVolumeFraction,
+  getIstanbulTimeParts,
+  TIMEZONE,
+} = require("./lib/market-hours");
+const journal = require("./lib/journal");
 const { normalizeDailyChangePercent } = require("./lib/indicators");
 
 const PORT = Number(process.env.PORT || 10000);
@@ -23,6 +29,8 @@ const POLL_MS = 60 * 1000;
 const HISTORY_DAYS = 400;
 const FETCH_DELAY_MS = 350;
 const REQUEST_TIMEOUT_MS = 10 * 1000;
+const HEALTH_ALERT_COOLDOWN_MS = 60 * 60 * 1000;
+const HEALTH_ERROR_RATIO = 0.5;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -58,6 +66,7 @@ const state = {
 };
 
 let scanLoopTimer = null;
+let lastHealthAlertAt = 0;
 
 async function fetchQuote(symbol) {
   try {
@@ -81,7 +90,7 @@ async function fetchBars(symbol, interval) {
   return normalizeBars(result.quotes);
 }
 
-async function scanSymbol(symbol, marketContext) {
+async function scanSymbol(symbol, marketContext, volumeFraction) {
   let quote = null;
   let dailyBars = [];
 
@@ -99,7 +108,7 @@ async function scanSymbol(symbol, marketContext) {
     await sleep(FETCH_DELAY_MS);
   }
 
-  const row = analyzeSymbol({ symbol, dailyBars, quote, marketContext });
+  const row = analyzeSymbol({ symbol, dailyBars, quote, marketContext, volumeFraction });
   row.name = DISPLAY_NAMES[symbol] || symbol;
   if (quote?.sourceUrl) row.dataSource = quote.sourceUrl;
   if (row.dailyChangePercent == null && quote?.regularMarketChangePercent != null) {
@@ -116,7 +125,9 @@ async function scanMarket() {
 
   try {
     const rows = [];
-    let marketContext = { xu100AboveEma50: false, xu100Return10d: null };
+    let marketContext = { xu100AboveEma50: false, benchReturn: null, benchBars: [] };
+    let benchmarkFailed = false;
+    const volumeFraction = expectedVolumeFraction();
 
     try {
       const xuDaily = await fetchBars(BENCHMARK, "1d");
@@ -126,11 +137,12 @@ async function scanMarket() {
     } catch (err) {
       console.error("XU100 rejim verisi alınamadı:", err.message);
       state.xu100AboveEma50 = false;
+      benchmarkFailed = true;
     }
 
     for (const symbol of BIST_100) {
       try {
-        const row = await scanSymbol(symbol, marketContext);
+        const row = await scanSymbol(symbol, marketContext, volumeFraction);
         rows.push(row);
       } catch (err) {
         rows.push({
@@ -152,7 +164,7 @@ async function scanMarket() {
 
     const statusRank = (status) => {
       if (status === "FIRSAT") return 0;
-      if (status === "DİKKAT") return 1;
+      if (status === "DÖNÜŞ") return 1;
       return 2;
     };
 
@@ -174,6 +186,19 @@ async function scanMarket() {
     }
 
     try {
+      const closedSignals = journal.updateOpenSignals(enriched);
+      for (const signal of closedSignals) {
+        await notifier.send(notifier.formatClosedSignal(signal));
+      }
+      journal.recordSignals(enriched);
+    } catch (err) {
+      console.error("Sinyal günlüğü hatası:", err.message);
+    }
+
+    const failed = enriched.filter((r) => r.price == null).length;
+    await maybeSendHealthAlert(benchmarkFailed, failed, enriched.length);
+
+    try {
       const tg = await notifier.processRows(enriched);
       if (tg.sent > 0) {
         console.log(`Telegram: ${tg.sent} mesaj gönderildi (${tg.events.join(", ")})`);
@@ -184,9 +209,57 @@ async function scanMarket() {
   } catch (err) {
     state.lastError = err.message;
     console.error("Tarama hatası:", err.message);
+    await maybeSendHealthAlert(true, 0, 0, err.message);
   } finally {
     state.scanning = false;
   }
+}
+
+/** Veri kaynağı bozulursa bot sessizce durmasın: saatte en fazla bir uyarı. */
+async function maybeSendHealthAlert(benchmarkFailed, failedCount, totalCount, errorMessage) {
+  const tooManyFailures = totalCount > 0 && failedCount / totalCount >= HEALTH_ERROR_RATIO;
+  if (!benchmarkFailed && !tooManyFailures && !errorMessage) return;
+  if (Date.now() - lastHealthAlertAt < HEALTH_ALERT_COOLDOWN_MS) return;
+  lastHealthAlertAt = Date.now();
+
+  const lines = ["⚠️ BIST ALERTS veri uyarısı"];
+  if (benchmarkFailed) lines.push("XU100 verisi alınamadı, piyasa durumu bilinmiyor.");
+  if (tooManyFailures) lines.push(`${failedCount}/${totalCount} hissede fiyat alınamadı.`);
+  if (errorMessage) lines.push(`Hata: ${errorMessage}`);
+  lines.push("Sinyaller bu taramada güvenilir değil.");
+  await notifier.send(lines.join("\n"));
+}
+
+function istanbulYmd(date = new Date()) {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: TIMEZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(date);
+}
+
+function buildWeeklyReport() {
+  const since = Date.now() - 7 * 24 * 60 * 60 * 1000;
+  return journal.formatReport("Haftalık sinyal raporu (son 7 gün)", journal.summarize(since));
+}
+
+function buildFullReport() {
+  return [
+    buildWeeklyReport(),
+    "",
+    journal.formatReport("Tüm zamanlar", journal.summarize(0)),
+  ].join("\n");
+}
+
+/** Cuma 18:00'den sonra haftada bir kez rapor gönderir. */
+async function maybeSendWeeklyReport() {
+  const { weekday, hour } = getIstanbulTimeParts();
+  if (weekday !== 5 || hour < 18) return;
+  const key = istanbulYmd();
+  if (journal.getLastWeeklyReport() === key) return;
+  const ok = await notifier.send(buildWeeklyReport());
+  if (ok) journal.setLastWeeklyReport(key);
 }
 
 function scheduleNextLoop() {
@@ -206,6 +279,11 @@ async function scanLoop() {
   }
 
   await scanMarket();
+  try {
+    await maybeSendWeeklyReport();
+  } catch (err) {
+    console.error("Haftalık rapor hatası:", err.message);
+  }
   scheduleNextLoop();
 }
 
@@ -236,9 +314,9 @@ tr:last-child td{border:0}
 .score-high{color:var(--green);font-weight:700}
 .pct-up{color:var(--pct-up)}.pct-down{color:var(--pct-down)}
 .action-firsat{color:#39ff14;font-weight:700;text-shadow:0 0 8px rgba(57,255,20,.45)}
-.action-dikkat{color:#ffb020;font-weight:700}
+.action-donus{color:#4fc3f7;font-weight:700}
 .action-none{color:var(--muted)}
-.firsat{color:var(--green)}.dikkat{color:#ffb020}.bekle{color:var(--gray)}
+.firsat{color:var(--green)}.donus{color:#4fc3f7}.bekle{color:var(--gray)}
 .chart-btn{border:1px solid var(--line);background:#0a0a0a;color:var(--ink);padding:5px 8px;cursor:pointer;font:inherit}
 .chart-btn:hover{border-color:#9ef01a;color:#9ef01a}
 .modal{position:fixed;inset:0;background:rgba(0,0,0,.82);display:none;align-items:center;justify-content:center;z-index:1000;padding:20px}
@@ -258,7 +336,7 @@ footer{margin-top:auto;padding:14px 20px;border-top:1px solid var(--line);text-a
     <div class="pill">Son Tarama (15 dk gecikmeli)<strong id="scan">—</strong></div>
     <div class="pill">TARANAN HİSSE<strong id="scanned-count">—</strong></div>
     <div class="pill">FIRSAT<strong id="firsat-count">—</strong></div>
-    <div class="pill">DİKKAT<strong id="dikkat-count">—</strong></div>
+    <div class="pill">DÖNÜŞ<strong id="donus-count">—</strong></div>
     <div class="pill">Tarama<strong id="status">—</strong></div>
   </div>
   <div class="search-wrap">
@@ -268,9 +346,9 @@ footer{margin-top:auto;padding:14px 20px;border-top:1px solid var(--line);text-a
     <table>
       <thead><tr>
         <th>Sembol</th><th>Fiyat</th><th>Günlük %</th><th>Haftalık %</th><th>Aylık %</th><th>Yıllık %</th>
-        <th>Skor</th><th>Sinyal</th><th>Action</th><th>TP</th><th>SL</th><th>RSI</th><th>Grafik</th>
+        <th>Skor</th><th>Sinyal</th><th>Action</th><th>TP</th><th>SL</th><th>Lot</th><th>RSI</th><th>Beta</th><th>F/K</th><th>Grafik</th>
       </tr></thead>
-      <tbody id="rows"><tr><td colspan="13" style="color:var(--muted);padding:24px">Veri yükleniyor…</td></tr></tbody>
+      <tbody id="rows"><tr><td colspan="16" style="color:var(--muted);padding:24px">Veri yükleniyor…</td></tr></tbody>
     </table>
   </div>
 </main>
@@ -298,13 +376,14 @@ const fmtPct=v=>{
 };
 const pctCls=v=>v==null||!Number.isFinite(Number(v))?'':Number(v)>=0?'pct-up':'pct-down';
 const tvSymbol=s=>('BIST:'+(s||'').replace('.IS',''));
-const actionCls=a=>a==='FIRSAT'?'action-firsat':a==='DİKKAT'?'action-dikkat':'action-none';
-const signalCls=s=>s==='FIRSAT'?'firsat':s==='DİKKAT'?'dikkat':'bekle';
+const actionCls=a=>a==='FIRSAT'?'action-firsat':a==='DÖNÜŞ'?'action-donus':'action-none';
+const signalCls=s=>s==='FIRSAT'?'firsat':s==='DÖNÜŞ'?'donus':'bekle';
+const esc=v=>String(v??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const actionLabel=row=>{
-  if(row.action==='DİKKAT'&&row.statusReason){
-    return row.action+'<br><small style="color:#ffb020">'+row.statusReason+'</small>';
+  if(row.statusReason){
+    return esc(row.action||'—')+'<br><small style="color:var(--muted)">'+esc(row.statusReason)+'</small>';
   }
-  return row.action||'—';
+  return esc(row.action||'—');
 };
 function filterRows(rows,query){
   const q=query.trim().toLocaleLowerCase('tr-TR');
@@ -326,9 +405,12 @@ function renderTable(rows){
       <td class="\${actionCls(row.action)}">\${actionLabel(row)}</td>
       <td>\${row.tp??'-'}</td>
       <td>\${row.sl??'-'}</td>
+      <td>\${row.lots??'—'}</td>
       <td>\${row.rsi??'—'}</td>
+      <td>\${row.beta??'—'}</td>
+      <td>\${row.pe??'—'}</td>
       <td><button type="button" class="chart-btn" data-symbol="\${row.symbol}" title="TradingView grafik">📊 Grafik</button></td>
-    </tr>\`).join(''):'<tr><td colspan="13" style="color:var(--muted);padding:24px">Sonuç bulunamadı.</td></tr>';
+    </tr>\`).join(''):'<tr><td colspan="16" style="color:var(--muted);padding:24px">Sonuç bulunamadı.</td></tr>';
 }
 function openChart(symbol){
   const modal=document.getElementById('chartModal');
@@ -381,7 +463,7 @@ async function render(){
     document.getElementById('scan').textContent=s.lastScanAt?new Date(s.lastScanAt).toLocaleString('tr-TR'):'—';
     document.getElementById('scanned-count').textContent=s.scannedCount??s.universeCount??'—';
     document.getElementById('firsat-count').textContent=s.firsatCount;
-    document.getElementById('dikkat-count').textContent=s.dikkatCount??'—';
+    document.getElementById('donus-count').textContent=s.donusCount??'—';
     const statusEl=document.getElementById('status');
     if(s.marketOpen===false){
       statusEl.textContent='PİYASA KAPALI - UYKUDA';
@@ -430,7 +512,7 @@ app.get("/api/state", (_req, res) => {
     universeCount: state.universeCount,
     pollIntervalMs: POLL_MS,
     firsatCount: state.rows.filter((r) => r.status === "FIRSAT").length,
-    dikkatCount: state.rows.filter((r) => r.status === "DİKKAT").length,
+    donusCount: state.rows.filter((r) => r.status === "DÖNÜŞ").length,
     xu100AboveEma50: state.xu100AboveEma50,
     telegramEnabled: state.telegramEnabled,
     alarmRegistered: state.alarmRegistered,
@@ -452,6 +534,7 @@ async function boot() {
       removeAlert: targetsStore.removeAlert,
       normalizeSymbol: targetsStore.normalizeSymbol,
     });
+    notifier.registerReportHandler(buildFullReport);
     state.alarmRegistered = true;
     try {
       state.telegramTestSent = await notifier.sendTest();

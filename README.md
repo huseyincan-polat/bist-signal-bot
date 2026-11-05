@@ -1,38 +1,129 @@
 # BIST ALERTS
 
-Node.js Express scanner for BIST 100 (+ ALTINS1) using Yahoo Finance daily OHLCV. Scans the full universe sequentially with 10s per-request timeouts, then waits 60s before the next pass. Outbound fetches run only during BIST hours (**Mon–Fri 09:55–18:10 Europe/Istanbul**); outside that window the loop sleeps with zero API/scrape calls. **FIRSAT** signals require a liquidity sweep near the 10-session low plus a 1.5× volume spike.
+BIST 100 (+ ALTINS1) için Node.js/Express tarama botu. Yahoo Finance günlük verisini kullanır, sinyalleri Telegram'a gönderir ve bir panelde gösterir. Tarama yalnızca **BIST saatlerinde (hafta içi 09:55–18:10, İstanbul)** çalışır. Bir tarama bitince 60 saniye beklenir. Yahoo'nun BIST verisi yaklaşık 15 dakika gecikmelidir.
 
-## Setup
+> Bu bot bir analiz aracıdır, yatırım tavsiyesi vermez. Karar ve risk kullanıcıya aittir.
+
+## Sinyaller
+
+Bot, piyasanın durumuna göre iki farklı mantıkla çalışır. Piyasa durumu, XU100 endeksinin 50 günlük EMA'sının üstünde ya da altında olmasına göre belirlenir.
+
+### 🔔 FIRSAT: Güçlü piyasada kırılım (XU100 > EMA50)
+
+Aşağıdakilerin hepsi doğru olmalı:
+
+1. **Göreceli güç:** Hisse son `RS_WINDOW_DAYS` günde (varsayılan 63, yaklaşık 3 ay) XU100'den daha çok yükselmiş olmalı.
+2. **Trend:** Fiyat EMA20 ve EMA50'nin üstünde, iki ortalama da yukarı eğimli olmalı. Son 20 günde daha yüksek tepe ve daha yüksek dip görülmeli.
+3. **Tetik:** Fiyat 20 günlük direnci ya da önceki günün en yükseğini kırmalı. Aynı anda şunlar da sağlanmalı:
+   - **Hacim:** Bugünkü hacim, önceki 20 günün ortalamasının *günün o saatine kadar beklenen kısmından* büyük olmalı.
+   - **RSI(14):** Wilder RSI 50 ile 70 arasında olmalı. Bu şart `REQUIRE_RSI_MOMENTUM=false` ile kapatılabilir.
+4. **Kazanç/risk** en az `MIN_RR` (2) olmalı.
+5. Ortak filtrelerden geçmeli (aşağıda).
+
+### 🔄 DÖNÜŞ: Zayıf piyasada dönüş (XU100 < EMA50)
+
+Piyasa düşerken **sert düşmüş, ama kârlı ve ucuz** bir hisse yukarı dönmeye başladığında sinyal verir. Borsa İstanbul üzerine yapılan çalışmalar, kısa vadeli dönüşlerin piyasa durumuna bağlı olduğunu ve kârlı, düşük çarpanlı hisselerde daha güçlü olduğunu gösteriyor.
+
+1. **Düşüş:** Hisse son 10 günde en az `REVERSAL_DROP_PCT` (%7) düşmüş olmalı ya da son 5 günde RSI `REVERSAL_RSI_MAX` (35) seviyesinin altına inmiş olmalı.
+2. **Dönüş:** Fiyat önceki günün en yükseğini aşmalı ya da RSI dipten yukarı dönerken fiyat önceki kapanışın üstüne çıkmalı.
+3. **Kârlılık:** Hisse başına kâr (EPS) sıfırdan büyük olmalı.
+4. **Ucuzluk:** F/K ≤ `MAX_PE` (15) ya da PD/DD ≤ `MAX_PB` (2) olmalı.
+5. **Kazanç/risk** en az 2 olmalı ve hisse ortak filtrelerden geçmeli.
+
+Yahoo bir hisse için F/K ve PD/DD verisi vermezse DÖNÜŞ sinyali verilmez. `REQUIRE_FUNDAMENTALS=false` ayarıyla, verisi olmayan hisselerde yalnızca teknik şartlar aranır.
+
+### Ortak filtreler
+
+- **Likidite:** 20 günlük ortalama işlem hacmi en az `MIN_TURNOVER_TL` (20 milyon TL) olmalı. Tahtası sığ hisseler elenir.
+- **Beta:** XU100'e göre 120 günlük beta en fazla `MAX_BETA` (1,5) olmalı. Aşırı oynak hisseler elenir. `0` değeri filtreyi kapatır.
+- **Veri kontrolü:** Son 120 günde %25'ten büyük bir günlük hareket varsa sinyal verilmez. BIST'te günlük fiyat limiti var, bu kadar büyük bir hareket genelde düzeltilmemiş bir bedelsiz ya da bölünme demektir.
+
+### Hedef ve stop
+
+Stop, son dip, EMA20 ve 1,5×ATR değerlerinden en düşük olanıdır. Hedef, giriş fiyatı + 2,5 × risk olarak hesaplanır. `CAPITAL_TL` ayarlandıysa mesajda, sermayenin `RISK_PCT` yüzdesini (varsayılan %1) riske edecek **lot sayısı** da gösterilir.
+
+Paneldeki **Skor** sütunu yalnızca sıralama içindir: destek, EMA, hacim ve RSI dönüşüne yakınlığı özetler. Sinyali belirlemez.
+
+## Telegram
+
+| Komut | Açıklama |
+|---|---|
+| `/alarm THYAO 320 285` | Özel hedef ve stop alarmı kurar |
+| `/alarmlar` veya `/list` | Kayıtlı alarmları listeler |
+| `/sil THYAO` | Alarmı siler |
+| `/rapor` | Son 7 günün ve tüm zamanların sinyal performansını gösterir |
+
+Bot ayrıca şunları otomatik gönderir:
+- Bir sinyal **hedefe ulaşınca, stop olunca ya da 30 gün içinde sonuçlanmayınca** bir mesaj atar.
+- **Her cuma 18:00'den sonra** haftalık performans raporu gönderir.
+- **Veri alınamazsa** (XU100 verisi gelmezse ya da hisselerin yarısından fazlasında hata olursa) saatte en fazla bir kez uyarı gönderir.
+
+Her sinyal `signals.json` dosyasındaki günlüğe kaydedilir.
+
+## Kurulum
 
 ```bash
 npm install
 ```
 
-Create `.env` (never commit):
+`.env` dosyası oluşturun (repoya eklemeyin):
 
 ```
 TELEGRAM_BOT_TOKEN=your_token
 TELEGRAM_CHAT_ID=your_chat_id
+
+# İsteğe bağlı
+CAPITAL_TL=100000        # lot hesabı için sermaye (0 = kapalı)
+RISK_PCT=1               # işlem başına risk (%)
+DATA_DIR=/var/data       # alarmların ve sinyal günlüğünün tutulacağı klasör
 ```
 
-## Run
+Diğer ayarlar ve varsayılan değerleri `lib/config.js` dosyasında.
+
+## Çalıştırma
 
 ```bash
 npm start
 ```
 
-Dashboard: `http://localhost:10000/`  
-Health: `GET` / `HEAD` `/health`
+Panel: `http://localhost:10000/`  
+Sağlık kontrolü: `GET` / `HEAD` `/health`
 
-## FIRSAT criteria
+## Test
 
-Both must be true:
+```bash
+npm test
+```
 
-1. **Liquidity sweep** — last price within 2% above the prior 10-session low, or wicked below that low and recovered
-2. **Volume** — `regularMarketVolume` ≥ 1.5× `averageDailyVolume10Day` (or 10-day volume SMA from history)
+## Backtest
 
-Custom TP/SL via Telegram: `/alarm THYAO 320 285`
+Strateji versiyonlarını geçmiş veride karşılaştırır. Canlı botla **aynı sinyal fonksiyonunu** kullanır.
+
+```bash
+npm run backtest                          # BIST 100, son 2 yıl, tüm versiyonlar
+npm run backtest -- --years 3
+npm run backtest -- --symbols THYAO,ASELS,BIMAS
+npm run backtest -- --variants C,D --csv sonuc.csv
+```
+
+| Versiyon | İçerik |
+|---|---|
+| A | Eski kurallar: 10 günlük güç, RSI 50–70, filtre yok |
+| B | 63 günlük güç, RSI şartı yok, filtre yok |
+| C | Yeni varsayılan FIRSAT: 63 günlük güç, RSI şartı, beta, likidite ve veri filtresi |
+| D | C + DÖNÜŞ modu |
+
+Backtest'in varsayımları:
+- İşleme sinyalden sonraki günün açılışında girilir.
+- Aynı gün hem stop hem hedef görülürse önce stop olduğu varsayılır.
+- Pozisyon en fazla 30 gün tutulur.
+- Her yönde %0,1 komisyon ve %0,1 kayma düşülür (`COMMISSION_PCT`, `SLIPPAGE_PCT`).
+- Geçmiş F/K verisi olmadığı için DÖNÜŞ'ün temel analiz şartı backtest'te uygulanmaz.
+
+İndirilen veri `.cache/backtest/` klasöründe saklanır.
 
 ## Deploy (Render)
 
-Docker build runs `node server.js`. Set `PORT`, `TELEGRAM_BOT_TOKEN`, and `TELEGRAM_CHAT_ID` in Render environment variables.
+Docker build `node server.js` komutunu çalıştırır. Render ortam değişkenlerine `PORT`, `TELEGRAM_BOT_TOKEN` ve `TELEGRAM_CHAT_ID` eklenmeli.
+
+Render'ın dosya sistemi kalıcı değildir. Alarmların ve sinyal günlüğünün yeniden başlatmada kaybolmaması için bir **Persistent Disk** bağlayın (ör. `/var/data`) ve `DATA_DIR=/var/data` ayarlayın.
