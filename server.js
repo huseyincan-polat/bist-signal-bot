@@ -22,6 +22,8 @@ const {
   TIMEZONE,
 } = require("./lib/market-hours");
 const journal = require("./lib/journal");
+const { getConfig } = require("./lib/config");
+const { computeSignalHistory } = require("./lib/signal-history");
 const { normalizeDailyChangePercent } = require("./lib/indicators");
 
 const PORT = Number(process.env.PORT || 10000);
@@ -67,6 +69,9 @@ const state = {
 
 let scanLoopTimer = null;
 let lastHealthAlertAt = 0;
+/** XU100'ün uzun dönem verisi günde bir kez çekilir. */
+const benchHistoryCache = { day: null, years: null, bars: null };
+const MAX_HISTORY_LOOKUPS_PER_SCAN = 10;
 
 async function fetchQuote(symbol) {
   try {
@@ -190,9 +195,16 @@ async function scanMarket() {
       for (const signal of closedSignals) {
         await notifier.send(notifier.formatClosedSignal(signal));
       }
-      journal.recordSignals(enriched);
+      journal.applyOpenSignalLimit(enriched, getConfig().maxOpenSignals);
+      journal.recordSignals(enriched.filter((r) => !r.limitReached));
     } catch (err) {
       console.error("Sinyal günlüğü hatası:", err.message);
+    }
+
+    try {
+      await attachSignalHistory(enriched);
+    } catch (err) {
+      console.error("Sinyal geçmişi hatası:", err.message);
     }
 
     const failed = enriched.filter((r) => r.price == null).length;
@@ -212,6 +224,48 @@ async function scanMarket() {
     await maybeSendHealthAlert(true, 0, 0, err.message);
   } finally {
     state.scanning = false;
+  }
+}
+
+async function fetchLongBars(symbol, years) {
+  const days = years * 365 + 420; // göstergeler için ek geçmiş
+  const period1 = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+  const result = await withTimeout(
+    yahooFinance.chart(symbol, { period1, interval: "1d" }),
+    REQUEST_TIMEOUT_MS * 2,
+    `history:${symbol}`,
+  );
+  return normalizeBars(result.quotes);
+}
+
+/** Bildirilecek her yeni sinyale, aynı kurulumun bu hissedeki geçmiş sonuçlarını ekler. */
+async function attachSignalHistory(rows) {
+  const config = getConfig();
+  const years = config.signalHistoryYears;
+  if (!years) return;
+
+  const targets = rows
+    .filter((r) => r.signalNotify && (r.status === "FIRSAT" || r.status === "DÖNÜŞ"))
+    .slice(0, MAX_HISTORY_LOOKUPS_PER_SCAN);
+  if (!targets.length) return;
+
+  const today = istanbulYmd();
+  if (benchHistoryCache.day !== today || benchHistoryCache.years !== years) {
+    benchHistoryCache.bars = await fetchLongBars(BENCHMARK, years);
+    benchHistoryCache.day = today;
+    benchHistoryCache.years = years;
+    await sleep(FETCH_DELAY_MS);
+  }
+
+  for (const row of targets) {
+    try {
+      const bars = await fetchLongBars(row.symbol, years);
+      row.history = computeSignalHistory(row.symbol, bars, benchHistoryCache.bars, config, row.status);
+      row.historyYears = years;
+    } catch (err) {
+      console.error(`${row.symbol} geçmişi alınamadı:`, err.message);
+    }
+    await sleep(FETCH_DELAY_MS);
   }
 }
 

@@ -25,7 +25,7 @@ function reversalStock() {
 }
 
 const goodQuote = { trailingPE: 7.5, priceToBook: 1.2, epsTrailingTwelveMonths: 4 };
-const config = getConfig({ maxBeta: 0 });
+const config = getConfig({ maxBeta: 0, enableReversal: true });
 
 test("zayıf piyasada kârlı ve ucuz hisse dönünce DÖNÜŞ sinyali verir", () => {
   const ctx = computeMarketContext(weakMarket(), config);
@@ -135,8 +135,18 @@ test("REQUIRE_FUNDAMENTALS kapalıysa temel veri eksik hissede yalnızca teknik 
   const ctx = computeMarketContext(weakMarket(), config);
   const bars = reversalStock();
   const price = bars[bars.length - 1].close;
-  const relaxed = getConfig({ maxBeta: 0, requireFundamentals: false });
+  const relaxed = getConfig({ maxBeta: 0, enableReversal: true, requireFundamentals: false });
   assert.equal(evaluateSignal(price, bars, {}, ctx, { config: relaxed }).status, "DÖNÜŞ");
   // Veri varsa yine uygulanır
   assert.equal(evaluateSignal(price, bars, { trailingPE: 50, priceToBook: 9, epsTrailingTwelveMonths: 1 }, ctx, { config: relaxed }).status, null);
+});
+
+test("DÖNÜŞ varsayılan olarak kapalıdır", () => {
+  const ctx = computeMarketContext(weakMarket(), config);
+  const bars = reversalStock();
+  const off = getConfig({ maxBeta: 0 });
+  assert.equal(off.enableReversal, false);
+  const signal = evaluateSignal(bars[bars.length - 1].close, bars, goodQuote, ctx, { config: off });
+  assert.equal(signal.status, null);
+  assert.equal(signal.reversal, null);
 });

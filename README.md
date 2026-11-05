@@ -20,7 +20,9 @@ Aşağıdakilerin hepsi doğru olmalı:
 4. **Kazanç/risk** en az `MIN_RR` (2) olmalı.
 5. Ortak filtrelerden geçmeli (aşağıda).
 
-### 🔄 DÖNÜŞ: Zayıf piyasada dönüş (XU100 < EMA50)
+### 🔄 DÖNÜŞ: Zayıf piyasada dönüş (XU100 < EMA50), varsayılan olarak KAPALI
+
+> Backtest'te (Kasım 2024 – Kasım 2025, 99 hisse) DÖNÜŞ'ün teknik kısmı komisyon sonrası kâr getirmedi: 832 işlem, kâr faktörü 1,01, ortalama +%0,03. F/K ve PD/DD filtresi geçmiş veri olmadığı için test edilemedi. Bu yüzden `ENABLE_DONUS=false` varsayılandır. Açmak için `ENABLE_DONUS=true` ayarlayın.
 
 Piyasa düşerken **sert düşmüş, ama kârlı ve ucuz** bir hisse yukarı dönmeye başladığında sinyal verir. Borsa İstanbul üzerine yapılan çalışmalar, kısa vadeli dönüşlerin piyasa durumuna bağlı olduğunu ve kârlı, düşük çarpanlı hisselerde daha güçlü olduğunu gösteriyor.
 
@@ -41,6 +43,21 @@ Yahoo bir hisse için F/K ve PD/DD verisi vermezse DÖNÜŞ sinyali verilmez. `R
 ### Hedef ve stop
 
 Stop, son dip, EMA20 ve 1,5×ATR değerlerinden en düşük olanıdır. Hedef, giriş fiyatı + 2,5 × risk olarak hesaplanır. `CAPITAL_TL` ayarlandıysa mesajda, sermayenin `RISK_PCT` yüzdesini (varsayılan %1) riske edecek **lot sayısı** da gösterilir.
+
+### Sinyal geçmişi ("zaman makinesi")
+
+Yeni bir sinyal geldiğinde bot, o hissenin son `SIGNAL_HISTORY_YEARS` yılının (varsayılan 3) verisini çeker. Aynı kuralların bu hissede geçmişte kaç kez sinyal verdiğini ve sonuçlarını mesaja ekler:
+
+```
+📜 Geçmiş (3 yıl): 9 sinyal → 🎯 2 hedef · 🛑 3 stop · ⌛ 4 süre doldu
+   Kazanma %55,6 · ortalama +2,1% (komisyon dahil)
+```
+
+Hesap backtest ile aynı varsayımları kullanır. `SIGNAL_HISTORY_YEARS=0` bu özelliği kapatır.
+
+### Açık sinyal sınırı
+
+Aynı anda en fazla `MAX_OPEN_SIGNALS` (varsayılan 5) açık sinyal takip edilir. Sınır doluyken gelen yeni sinyaller yine bildirilir, ama "sınır dolu" uyarısıyla gelir: lot önerilmez ve günlüğe yazılmaz. Böylece çok sinyal çıkan günlerde toplam risk sınırlı kalır. `0` değeri sınırı kaldırır.
 
 Paneldeki **Skor** sütunu yalnızca sıralama içindir: destek, EMA, hacim ve RSI dönüşüne yakınlığı özetler. Sinyali belirlemez.
 
@@ -112,6 +129,7 @@ npm run backtest -- --variants C,D --csv sonuc.csv
 | B | 63 günlük güç, RSI şartı yok, filtre yok |
 | C | Yeni varsayılan FIRSAT: 63 günlük güç, RSI şartı, beta, likidite ve veri filtresi |
 | D | C + DÖNÜŞ modu |
+| E | C, ama RSI 50–70 şartı yok |
 
 Backtest'in varsayımları:
 - İşleme sinyalden sonraki günün açılışında girilir.
@@ -121,6 +139,17 @@ Backtest'in varsayımları:
 - Geçmiş F/K verisi olmadığı için DÖNÜŞ'ün temel analiz şartı backtest'te uygulanmaz.
 
 İndirilen veri `.cache/backtest/` klasöründe saklanır.
+
+İlk sonuçlar (Kasım 2024 – Kasım 2025, 99 hisse, komisyon ve kayma dahil):
+
+| Versiyon | İşlem | Kazanma % | Ort. % | Kâr faktörü | Max düşüş % |
+|---|---|---|---|---|---|
+| A (eski) | 460 | 45,9 | 0,68 | 1,10 | −1097 |
+| B | 478 | 50,8 | 3,61 | 1,61 | −459 |
+| C | 335 | 51,3 | 3,28 | 1,59 | −352 |
+| D-DÖNÜŞ | 832 | 38,8 | 0,03 | 1,01 | −1843 |
+
+Test, bugünkü BIST 100 listesiyle yapıldı. Dönem içinde iyi gidip endekse giren hisseler listede olduğu için sonuçlar olduğundan iyi görünebilir (hayatta kalma yanlılığı).
 
 ## Deploy (Render)
 

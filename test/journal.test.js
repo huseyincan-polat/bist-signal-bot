@@ -40,3 +40,31 @@ test("sinyal günlüğü: kayıt, hedef, stop ve süre dolumu", () => {
   assert.match(text, /Kazanma oranı: %66\.7/);
   journal.reset();
 });
+
+test("açık sinyal sınırı dolunca yeni sinyaller işaretlenir ve günlüğe yazılmaz", () => {
+  journal.reset();
+  const t0 = Date.parse("2026-11-02T08:00:00Z");
+  journal.recordSignals([
+    { symbol: "AAA.IS", status: "FIRSAT", price: 100, tp: 110, sl: 96 },
+    { symbol: "BBB.IS", status: "FIRSAT", price: 50, tp: 55, sl: 48 },
+  ], t0, opts);
+
+  const rows = [
+    { symbol: "AAA.IS", status: "FIRSAT", price: 101, tp: 111, sl: 97, lots: 10 }, // zaten açık
+    { symbol: "CCC.IS", status: "FIRSAT", price: 20, tp: 22, sl: 19, lots: 50 }, // 3. sinyal: sığar
+    { symbol: "DDD.IS", status: "FIRSAT", price: 30, tp: 33, sl: 29, lots: 40 }, // 4.: sınır dolu
+    { symbol: "EEE.IS", status: "BEKLE", price: 5 },
+  ];
+  journal.applyOpenSignalLimit(rows, 3);
+  assert.equal(rows[0].limitReached, undefined);
+  assert.equal(rows[1].limitReached, undefined);
+  assert.equal(rows[2].limitReached, true);
+  assert.equal(rows[2].lots, null);
+  assert.equal(rows[2].openSignalCount, 3);
+
+  const added = journal.recordSignals(rows.filter((r) => !r.limitReached), t0 + 1000, opts);
+  assert.deepEqual(added.map((s) => s.symbol), ["CCC"]);
+
+  journal.applyOpenSignalLimit(rows, 0); // 0 = sınırsız
+  journal.reset();
+});

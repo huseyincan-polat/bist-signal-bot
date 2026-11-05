@@ -51,3 +51,21 @@ test("simülasyon: ertesi gün açılıştan girer, maliyeti düşer ve sonuç �
   }
   assert.ok(total > 0, "en az bir işlem üretilmeli");
 });
+
+test("sinyal geçmişi: aynı kurulumun hissedeki geçmiş sonuçları", () => {
+  const { computeSignalHistory, formatSignalHistory } = require("../lib/signal-history");
+  const rand = rng(7);
+  const benchSteps = Array.from({ length: 700 }, () => 0.0008 + (rand() - 0.5) * 0.02);
+  const bench = makeBars(series(10000, benchSteps));
+  const stock = makeBars(series(100, benchSteps.map((r) => r * 1.1 + 0.0004 + (rand() - 0.5) * 0.02)), { volume: 2_000_000 });
+
+  const config = getConfig({ enableReversal: true });
+  const history = computeSignalHistory("TEST.IS", stock, bench, config, "DÖNÜŞ");
+  assert.ok(history.trades > 0);
+  assert.equal(history.tp + history.sl + history.time, history.trades);
+  assert.match(formatSignalHistory(history, 3), /Geçmiş \(3 yıl\): \d+ sinyal/);
+
+  const none = { trades: 0, tp: 0, sl: 0, time: 0, winRate: null, avgReturn: null };
+  assert.match(formatSignalHistory(none, 3), /daha önce çıkmadı/);
+  assert.equal(formatSignalHistory(null, 3), null);
+});
