@@ -170,7 +170,8 @@ async function scanMarket() {
     const statusRank = (status) => {
       if (status === "FIRSAT") return 0;
       if (status === "DÖNÜŞ") return 1;
-      return 2;
+      if (status === "GÜÇLÜ") return 2;
+      return 3;
     };
 
     rows.sort((a, b) => {
@@ -191,9 +192,12 @@ async function scanMarket() {
     }
 
     try {
-      const closedSignals = journal.updateOpenSignals(enriched);
-      for (const signal of closedSignals) {
+      const { closed, raised } = journal.updateOpenSignals(enriched);
+      for (const signal of closed) {
         await notifier.send(notifier.formatClosedSignal(signal));
+      }
+      for (const event of raised) {
+        await notifier.send(notifier.formatStopRaised(event));
       }
       journal.applyOpenSignalLimit(enriched, getConfig().maxOpenSignals);
       journal.recordSignals(enriched.filter((r) => !r.limitReached));
@@ -369,8 +373,9 @@ tr:last-child td{border:0}
 .pct-up{color:var(--pct-up)}.pct-down{color:var(--pct-down)}
 .action-firsat{color:#39ff14;font-weight:700;text-shadow:0 0 8px rgba(57,255,20,.45)}
 .action-donus{color:#4fc3f7;font-weight:700}
+.action-guclu{color:#ffb020;font-weight:700}
 .action-none{color:var(--muted)}
-.firsat{color:var(--green)}.donus{color:#4fc3f7}.bekle{color:var(--gray)}
+.firsat{color:var(--green)}.donus{color:#4fc3f7}.guclu{color:#ffb020}.bekle{color:var(--gray)}
 .chart-btn{border:1px solid var(--line);background:#0a0a0a;color:var(--ink);padding:5px 8px;cursor:pointer;font:inherit}
 .chart-btn:hover{border-color:#9ef01a;color:#9ef01a}
 .modal{position:fixed;inset:0;background:rgba(0,0,0,.82);display:none;align-items:center;justify-content:center;z-index:1000;padding:20px}
@@ -391,6 +396,7 @@ footer{margin-top:auto;padding:14px 20px;border-top:1px solid var(--line);text-a
     <div class="pill">TARANAN HİSSE<strong id="scanned-count">—</strong></div>
     <div class="pill">FIRSAT<strong id="firsat-count">—</strong></div>
     <div class="pill">DÖNÜŞ<strong id="donus-count">—</strong></div>
+    <div class="pill">GÜÇLÜ (izleme)<strong id="guclu-count">—</strong></div>
     <div class="pill">Tarama<strong id="status">—</strong></div>
   </div>
   <div class="search-wrap">
@@ -430,8 +436,8 @@ const fmtPct=v=>{
 };
 const pctCls=v=>v==null||!Number.isFinite(Number(v))?'':Number(v)>=0?'pct-up':'pct-down';
 const tvSymbol=s=>('BIST:'+(s||'').replace('.IS',''));
-const actionCls=a=>a==='FIRSAT'?'action-firsat':a==='DÖNÜŞ'?'action-donus':'action-none';
-const signalCls=s=>s==='FIRSAT'?'firsat':s==='DÖNÜŞ'?'donus':'bekle';
+const actionCls=a=>a==='FIRSAT'?'action-firsat':a==='DÖNÜŞ'?'action-donus':a==='GÜÇLÜ'?'action-guclu':'action-none';
+const signalCls=s=>s==='FIRSAT'?'firsat':s==='DÖNÜŞ'?'donus':s==='GÜÇLÜ'?'guclu':'bekle';
 const esc=v=>String(v??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const actionLabel=row=>{
   if(row.statusReason){
@@ -518,6 +524,7 @@ async function render(){
     document.getElementById('scanned-count').textContent=s.scannedCount??s.universeCount??'—';
     document.getElementById('firsat-count').textContent=s.firsatCount;
     document.getElementById('donus-count').textContent=s.donusCount??'—';
+    document.getElementById('guclu-count').textContent=s.gucluCount??'—';
     const statusEl=document.getElementById('status');
     if(s.marketOpen===false){
       statusEl.textContent='PİYASA KAPALI - UYKUDA';
@@ -567,6 +574,7 @@ app.get("/api/state", (_req, res) => {
     pollIntervalMs: POLL_MS,
     firsatCount: state.rows.filter((r) => r.status === "FIRSAT").length,
     donusCount: state.rows.filter((r) => r.status === "DÖNÜŞ").length,
+    gucluCount: state.rows.filter((r) => r.status === "GÜÇLÜ").length,
     xu100AboveEma50: state.xu100AboveEma50,
     telegramEnabled: state.telegramEnabled,
     alarmRegistered: state.alarmRegistered,

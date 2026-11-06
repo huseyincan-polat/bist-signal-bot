@@ -22,7 +22,7 @@ Aşağıdakilerin hepsi doğru olmalı:
 
 ### 🔄 DÖNÜŞ: Zayıf piyasada dönüş (XU100 < EMA50), varsayılan olarak KAPALI
 
-> Backtest'te (Kasım 2024 – Kasım 2025, 99 hisse) DÖNÜŞ'ün teknik kısmı komisyon sonrası kâr getirmedi: 832 işlem, kâr faktörü 1,01, ortalama +%0,03. F/K ve PD/DD filtresi geçmiş veri olmadığı için test edilemedi. Bu yüzden `ENABLE_DONUS=false` varsayılandır. Açmak için `ENABLE_DONUS=true` ayarlayın.
+> Backtest'te (Kasım 2024 – Kasım 2026, 99 hisse) DÖNÜŞ'ün teknik kısmı komisyon sonrası kâr getirmedi: 832 işlem, kâr faktörü 1,01, ortalama +%0,03. F/K ve PD/DD filtresi geçmiş veri olmadığı için test edilemedi. Bu yüzden `ENABLE_DONUS=false` varsayılandır. Açmak için `ENABLE_DONUS=true` ayarlayın.
 
 Piyasa düşerken **sert düşmüş, ama kârlı ve ucuz** bir hisse yukarı dönmeye başladığında sinyal verir. Borsa İstanbul üzerine yapılan çalışmalar, kısa vadeli dönüşlerin piyasa durumuna bağlı olduğunu ve kârlı, düşük çarpanlı hisselerde daha güçlü olduğunu gösteriyor.
 
@@ -34,6 +34,10 @@ Piyasa düşerken **sert düşmüş, ama kârlı ve ucuz** bir hisse yukarı dö
 
 Yahoo bir hisse için F/K ve PD/DD verisi vermezse DÖNÜŞ sinyali verilmez. `REQUIRE_FUNDAMENTALS=false` ayarıyla, verisi olmayan hisselerde yalnızca teknik şartlar aranır.
 
+### 👀 GÜÇLÜ: Zayıf piyasada güçlü kalanlar (izleme listesi)
+
+Piyasa zayıfken (XU100 < EMA50), FIRSAT kurallarını piyasa filtresi hariç geçen hisseler **GÜÇLÜ** olarak işaretlenir ve Telegram'a bilgi olarak gönderilir. Bunlar **işlem önerisi değildir**: stop, hedef ve lot verilmez, günlüğe yazılmaz. Backtest'te zayıf piyasa sinyalleri yıldan yıla çok değişken çıktı (bir yıl kâr faktörü 0,62, bir yıl 2,62, bir yıl 1,01). `WEAK_MARKET_WATCH=false` ile kapatılır. Zayıf piyasada da gerçek FIRSAT sinyali istenirse `REQUIRE_MARKET_UPTREND=false` ayarlanır (önerilmez).
+
 ### Ortak filtreler
 
 - **Likidite:** 20 günlük ortalama işlem hacmi en az `MIN_TURNOVER_TL` (20 milyon TL) olmalı. Tahtası sığ hisseler elenir.
@@ -42,7 +46,9 @@ Yahoo bir hisse için F/K ve PD/DD verisi vermezse DÖNÜŞ sinyali verilmez. `R
 
 ### Hedef ve stop
 
-Stop, son dip, EMA20 ve 1,5×ATR değerlerinden en düşük olanıdır. Hedef, giriş fiyatı + 2,5 × risk olarak hesaplanır. `CAPITAL_TL` ayarlandıysa mesajda, sermayenin `RISK_PCT` yüzdesini (varsayılan %1) riske edecek **lot sayısı** da gösterilir.
+İlk stop, son dip, EMA20 ve 1,5×ATR değerlerinden en düşük olanıdır.
+
+**Varsayılan çıkış: takip eden stop.** Sabit hedef yoktur. İşlem açıldıktan sonra stop, görülen en yüksek fiyatın `TRAIL_ATR` (3) × ATR(14) altına çekilerek yükseltilir, asla indirilmez. Stop en az %2 yükseldiğinde Telegram'a "stop yükseltildi" mesajı gider. Sinyal en fazla `MAX_HOLD_DAYS` (60) işlem günü takip edilir. Backtest'te takip eden stop, sabit hedefe göre daha yüksek kâr faktörü ve yaklaşık yarı yarıya daha küçük en büyük düşüş verdi (aşağıdaki tablo). `TRAIL_ATR=0` ayarlanırsa eski davranışa, yani giriş + `TP_R` (2,5) × risk sabit hedefine dönülür. `CAPITAL_TL` ayarlandıysa mesajda, sermayenin `RISK_PCT` yüzdesini (varsayılan %1) riske edecek **lot sayısı** da gösterilir.
 
 ### Sinyal geçmişi ("zaman makinesi")
 
@@ -71,7 +77,7 @@ Paneldeki **Skor** sütunu yalnızca sıralama içindir: destek, EMA, hacim ve R
 | `/rapor` | Son 7 günün ve tüm zamanların sinyal performansını gösterir |
 
 Bot ayrıca şunları otomatik gönderir:
-- Bir sinyal **hedefe ulaşınca, stop olunca ya da 30 gün içinde sonuçlanmayınca** bir mesaj atar.
+- Bir sinyalin **stopu yükseldiğinde**, sinyal **takip eden stopla ya da ilk stopla kapandığında** veya **60 işlem gününde sonuçlanmadığında** mesaj atar.
 - **Her cuma 18:00'den sonra** haftalık performans raporu gönderir.
 - **Veri alınamazsa** (XU100 verisi gelmezse ya da hisselerin yarısından fazlasında hata olursa) saatte en fazla bir kez uyarı gönderir.
 
@@ -129,26 +135,38 @@ npm run backtest -- --variants C,D --csv sonuc.csv
 | B | 63 günlük güç, RSI şartı yok, filtre yok |
 | C | 63 günlük güç, RSI şartı, beta, likidite ve veri filtresi |
 | D | C + DÖNÜŞ modu |
-| E | **Varsayılan FIRSAT:** C, ama RSI 50–70 şartı yok |
+| E | C, ama RSI 50–70 şartı yok (sabit hedef 2,5R, 30 gün) |
+| E15 / E2 | E, hedef 1,5R / 2R |
+| E60 | E, en fazla 60 gün |
+| **ETR (varsayılan)** | E, sabit hedef yok, takip eden stop (en yüksek − 3×ATR), en fazla 60 gün |
+| F | E, piyasa filtresi yok (sonuçlar piyasa güçlü/zayıf diye ayrılır) |
+| FTR | F + takip eden stop |
 
 Backtest'in varsayımları:
 - İşleme sinyalden sonraki günün açılışında girilir.
 - Aynı gün hem stop hem hedef görülürse önce stop olduğu varsayılır.
-- Pozisyon en fazla 30 gün tutulur.
+- Pozisyon en fazla 30 gün (ETR/FTR/E60'ta 60 gün) tutulur. Takip eden stop, dünkü bara kadarki bilgiyle hesaplanır.
 - Her yönde %0,1 komisyon ve %0,1 kayma düşülür (`COMMISSION_PCT`, `SLIPPAGE_PCT`).
 - Geçmiş F/K verisi olmadığı için DÖNÜŞ'ün temel analiz şartı backtest'te uygulanmaz.
 
 İndirilen veri `.cache/backtest/` klasöründe saklanır.
 
-İlk sonuçlar (Kasım 2024 – Kasım 2025, 99 hisse, komisyon ve kayma dahil):
+Sonuçlar (Kasım 2024 – Kasım 2026, 99 hisse, komisyon ve kayma dahil):
 
 | Versiyon | İşlem | Kazanma % | Ort. % | Kâr faktörü | Max düşüş % |
 |---|---|---|---|---|---|
 | A (eski) | 460 | 45,9 | 0,68 | 1,10 | −1097 |
 | B | 478 | 50,8 | 3,61 | 1,61 | −459 |
 | C | 335 | 51,3 | 3,28 | 1,59 | −352 |
-| **E (varsayılan)** | 471 | 51,0 | 3,76 | 1,64 | −436 |
+| E | 471 | 51,0 | 3,76 | 1,64 | −436 |
+| E15 (hedef 1,5R) | 494 | 52,0 | 3,22 | 1,55 | −480 |
+| E2 (hedef 2R) | 479 | 51,4 | 3,48 | 1,59 | −441 |
+| E60 (60 gün) | 369 | 49,3 | 6,48 | 1,82 | −603 |
+| **ETR (varsayılan)** | 491 | 39,3 | 3,42 | 1,88 | −204 |
+| F-zayıf (zayıf piyasada FIRSAT) | 132 | 52,3 | 4,65 | 1,73 | −244 |
 | D-DÖNÜŞ | 832 | 38,8 | 0,03 | 1,01 | −1843 |
+
+3 yıllık test (Kasım 2023 – Kasım 2026) aynı tabloyu verdi: ETR kâr faktörü 1,92 ve max düşüş −242, E ise 1,63 ve −436. Ama **son 6 ayda (Mayıs–Kasım 2026) bütün versiyonlar zararda**: E −%6,96, ETR −%1,90 işlem başına ortalama. Takip eden stop zararı küçültüyor ama düşen piyasada bu strateji de kaybettiriyor.
 
 Test, bugünkü BIST 100 listesiyle yapıldı. Dönem içinde iyi gidip endekse giren hisseler listede olduğu için sonuçlar olduğundan iyi görünebilir (hayatta kalma yanlılığı).
 
