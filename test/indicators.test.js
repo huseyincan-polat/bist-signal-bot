@@ -48,3 +48,11 @@ test("gün içi beklenen hacim oranı", () => {
   assert.ok(Math.abs(noon - (3 / 8) * 0.85) < 1e-9);
   assert.equal(expectedVolumeFraction(new Date("2026-11-04T15:05:00Z")), 1); // 18:05
 });
+
+test("günlük değişim yüzdesi 100 ile çarpılmaz (Yahoo değeri zaten yüzde)", () => {
+  const { normalizeDailyChangePercent } = require("../lib/indicators");
+  assert.equal(normalizeDailyChangePercent(-0.0977), -0.1);
+  assert.equal(normalizeDailyChangePercent(0.143), 0.14);
+  assert.equal(normalizeDailyChangePercent(-9.69), -9.69);
+  assert.equal(normalizeDailyChangePercent(null), null);
+});
