@@ -75,7 +75,7 @@ async function loadBars(symbol, period1, refresh) {
 const fmt = (n, d = 2) => (n == null || !Number.isFinite(n) ? "—" : n.toFixed(d));
 
 function printTable(rows) {
-  const headers = ["Versiyon", "İşlem", "Kazanma %", "Ort. %", "Medyan %", "Kâr faktörü", "Toplam %", "Max düşüş %", "Ort. gün", "Hedef/Stop/Süre"];
+  const headers = ["Versiyon", "İşlem", "Kazanma %", "Ort. %", "Medyan %", "Kâr faktörü", "Toplam %", "Max düşüş %", "Ort. gün", "Hedef/Stop/İzSt/Süre"];
   const data = rows.map((r) => [
     r.key,
     String(r.s.trades),
@@ -86,7 +86,7 @@ function printTable(rows) {
     fmt(r.s.totalReturn, 1),
     fmt(r.s.maxDrawdown, 1),
     fmt(r.s.avgHold, 1),
-    `${r.s.tp}/${r.s.sl}/${r.s.time}`,
+    `${r.s.tp}/${r.s.sl}/${r.s.trail}/${r.s.time}`,
   ]);
   const widths = headers.map((h, i) => Math.max(h.length, ...data.map((d) => d[i].length)));
   const line = (cells) => cells.map((c, i) => c.padEnd(widths[i])).join(" | ");
@@ -140,11 +140,17 @@ async function main() {
           config,
           fromDate,
           allowReversal: variant.allowReversal,
+          maxHoldBars: variant.maxHoldBars,
+          trailAtr: variant.trailAtr,
         }),
       );
     }
     trades.forEach((t) => allTrades.push({ variant: key, ...t }));
     results.push({ key, label: variant.label, s: summarizeTrades(trades) });
+    if (variant.splitByMarket) {
+      results.push({ key: `${key}-güçlü`, label: "  piyasa güçlüyken (XU100 > EMA50)", s: summarizeTrades(trades.filter((t) => t.marketUp)) });
+      results.push({ key: `${key}-zayıf`, label: "  piyasa zayıfken (XU100 < EMA50)", s: summarizeTrades(trades.filter((t) => !t.marketUp)) });
+    }
     if (variant.allowReversal) {
       results.push({ key: `${key}-FIRSAT`, label: "  yalnızca FIRSAT işlemleri", s: summarizeTrades(trades.filter((t) => t.type === "FIRSAT")) });
       results.push({ key: `${key}-DÖNÜŞ`, label: "  yalnızca DÖNÜŞ işlemleri", s: summarizeTrades(trades.filter((t) => t.type === "DÖNÜŞ")) });
@@ -164,9 +170,9 @@ async function main() {
   console.log("Not: Geçmiş performans gelecekteki sonuçların garantisi değildir.");
 
   if (args.csv) {
-    const header = "variant,symbol,type,signalDate,entryDate,exitDate,entry,exit,tp,sl,outcome,holdBars,returnPct";
+    const header = "variant,symbol,type,marketUp,signalDate,entryDate,exitDate,entry,exit,tp,sl,outcome,holdBars,returnPct";
     const lines = allTrades.map((t) =>
-      [t.variant, t.symbol, t.type, t.signalDate, t.entryDate, t.exitDate, t.entry.toFixed(4), t.exit.toFixed(4), t.tp, t.sl, t.outcome, t.holdBars, t.returnPct.toFixed(3)].join(","),
+      [t.variant, t.symbol, t.type, t.marketUp ? 1 : 0, t.signalDate, t.entryDate, t.exitDate, t.entry.toFixed(4), t.exit.toFixed(4), t.tp, t.sl, t.outcome, t.holdBars, t.returnPct.toFixed(3)].join(","),
     );
     fs.writeFileSync(args.csv, `${header}\n${lines.join("\n")}\n`);
     console.log(`\nİşlem listesi kaydedildi: ${args.csv}`);

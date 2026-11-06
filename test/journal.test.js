@@ -3,9 +3,10 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const journal = require("../lib/journal");
+const { getConfig } = require("../lib/config");
 
 const DAY = 24 * 60 * 60 * 1000;
-const opts = { persist: false };
+const opts = { persist: false, config: getConfig({ maxHoldDays: 20 }) }; // 20 işlem günü ≈ 28 takvim günü
 
 test("sinyal günlüğü: kayıt, hedef, stop ve süre dolumu", () => {
   journal.reset();
@@ -21,14 +22,14 @@ test("sinyal günlüğü: kayıt, hedef, stop ve süre dolumu", () => {
   // Aynı hissede açık sinyal varken tekrar kaydedilmez
   assert.equal(journal.recordSignals([{ symbol: "AAA.IS", status: "FIRSAT", price: 101, tp: 111, sl: 97 }], t0 + 1000, opts).length, 0);
 
-  const closed = journal.updateOpenSignals([
+  const { closed } = journal.updateOpenSignals([
     { symbol: "AAA.IS", price: 111 },
     { symbol: "BBB.IS", price: 47.5 },
     { symbol: "CCC.IS", price: 20.5 },
   ], t0 + DAY, opts);
   assert.deepEqual(closed.map((s) => [s.symbol, s.status, s.returnPct]), [["AAA", "tp", 10], ["BBB", "sl", -4]]);
 
-  const expired = journal.updateOpenSignals([{ symbol: "CCC.IS", price: 20.5 }], t0 + 31 * DAY, opts);
+  const { closed: expired } = journal.updateOpenSignals([{ symbol: "CCC.IS", price: 20.5 }], t0 + 31 * DAY, opts);
   assert.deepEqual(expired.map((s) => [s.symbol, s.status, s.returnPct]), [["CCC", "expired", 2.5]]);
 
   const summary = journal.summarize(0);
@@ -66,5 +67,35 @@ test("açık sinyal sınırı dolunca yeni sinyaller işaretlenir ve günlüğe 
   assert.deepEqual(added.map((s) => s.symbol), ["CCC"]);
 
   journal.applyOpenSignalLimit(rows, 0); // 0 = sınırsız
+  journal.reset();
+});
+
+test("takip eden stop: yükselir, asla inmez, bildirilir ve kapanışta 'trail' olur", () => {
+  journal.reset();
+  const t0 = Date.parse("2026-11-02T08:00:00Z");
+  journal.recordSignals([{ symbol: "TRL.IS", status: "FIRSAT", price: 100, tp: null, sl: 95, trailAtr: 3 }], t0, opts);
+
+  // ATR 2 → stop = en yüksek − 6. Fiyat 100: 94 < 95, stop değişmez
+  let r = journal.updateOpenSignals([{ symbol: "TRL.IS", price: 100, atr: 2 }], t0 + DAY, opts);
+  assert.deepEqual([r.closed.length, r.raised.length], [0, 0]);
+
+  // Fiyat 110: stop 104'e çıkar (%9,5 artış → bildirilir)
+  r = journal.updateOpenSignals([{ symbol: "TRL.IS", price: 110, atr: 2 }], t0 + 2 * DAY, opts);
+  assert.deepEqual(r.raised.map((e) => [e.from, e.to]), [[95, 104]]);
+
+  // Fiyat 108: en yüksek 110 kalır, stop 104'te kalır (inmez)
+  r = journal.updateOpenSignals([{ symbol: "TRL.IS", price: 108, atr: 2 }], t0 + 3 * DAY, opts);
+  assert.equal(r.raised.length, 0);
+  assert.equal(journal.summarize(0).openList[0].stop, 104);
+
+  // Fiyat 111: stop 105 (%1 artış → kaydedilir ama bildirilmez)
+  r = journal.updateOpenSignals([{ symbol: "TRL.IS", price: 111, atr: 2 }], t0 + 4 * DAY, opts);
+  assert.equal(r.raised.length, 0);
+  assert.equal(journal.summarize(0).openList[0].stop, 105);
+
+  // Fiyat 104,5: stopun altında → takip eden stop ile kâr ederek kapanır
+  r = journal.updateOpenSignals([{ symbol: "TRL.IS", price: 104.5, atr: 2 }], t0 + 5 * DAY, opts);
+  assert.deepEqual(r.closed.map((s) => [s.status, s.returnPct]), [["trail", 4.5]]);
+  assert.match(journal.formatReport("T", journal.summarize(0)), /1 takip eden stop/);
   journal.reset();
 });

@@ -150,3 +150,52 @@ test("DÖNÜŞ varsayılan olarak kapalıdır", () => {
   assert.equal(signal.status, null);
   assert.equal(signal.reversal, null);
 });
+
+test("zayıf piyasada kuralları geçen hisse GÜÇLÜ (izleme) olur: stop, hedef ve lot yok", () => {
+  const ctx = computeMarketContext(weakMarket(), config);
+  const steps = [];
+  for (let i = 0; i < 135; i += 1) steps.push(0.008, -0.005);
+  steps.push(0.015);
+  const bars = makeBars(series(100, steps), { volume: 1_000_000 });
+  bars[bars.length - 1].volume = 3_000_000;
+  const price = bars[bars.length - 1].close;
+
+  const signal = evaluateSignal(price, bars, null, ctx, { config: getConfig({ maxBeta: 0 }) });
+  assert.equal(signal.status, "GÜÇLÜ");
+  assert.equal(signal.sl, null);
+  assert.equal(signal.tp, null);
+
+  const off = evaluateSignal(price, bars, null, ctx, { config: getConfig({ maxBeta: 0, weakMarketWatch: false }) });
+  assert.equal(off.status, null);
+
+  const noFilter = evaluateSignal(price, bars, null, ctx, { config: getConfig({ maxBeta: 0, requireMarketUptrend: false }) });
+  assert.equal(noFilter.status, "FIRSAT");
+  assert.match(noFilter.reason, /zayıf piyasada/);
+
+  const row = analyzeSymbol({ symbol: "GUC.IS", dailyBars: bars, quote: { regularMarketPrice: price }, marketContext: ctx, config: getConfig({ maxBeta: 0, capitalTl: 100000 }) });
+  assert.equal(row.status, "GÜÇLÜ");
+  assert.equal(row.lots, null);
+  delete signalCache["GUC.IS"];
+});
+
+test("takip eden stop açıkken FIRSAT satırında sabit hedef yok, ATR var", () => {
+  const strongBench = makeBars(series(10000, Array(270).fill(0.001)));
+  const ctx = computeMarketContext(strongBench, config);
+  const steps = [];
+  for (let i = 0; i < 135; i += 1) steps.push(0.008, -0.005);
+  steps.push(0.015);
+  const bars = makeBars(series(100, steps), { volume: 1_000_000 });
+  bars[bars.length - 1].volume = 3_000_000;
+  const input = { symbol: "TRL.IS", dailyBars: bars, quote: { regularMarketPrice: bars[bars.length - 1].close }, marketContext: ctx };
+
+  const trail = analyzeSymbol({ ...input, config: getConfig({ maxBeta: 0, trailAtr: 3 }) });
+  assert.equal(trail.status, "FIRSAT");
+  assert.equal(trail.tp, null);
+  assert.equal(trail.trailAtr, 3);
+  assert.ok(trail.atr > 0 && trail.sl < trail.price);
+
+  const fixed = analyzeSymbol({ ...input, config: getConfig({ maxBeta: 0, trailAtr: 0 }) });
+  assert.ok(fixed.tp > fixed.price);
+  assert.equal(fixed.trailAtr, null);
+  delete signalCache["TRL.IS"];
+});

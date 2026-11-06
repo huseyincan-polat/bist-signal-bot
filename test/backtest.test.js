@@ -62,10 +62,25 @@ test("sinyal geçmişi: aynı kurulumun hissedeki geçmiş sonuçları", () => {
   const config = getConfig({ enableReversal: true });
   const history = computeSignalHistory("TEST.IS", stock, bench, config, "DÖNÜŞ");
   assert.ok(history.trades > 0);
-  assert.equal(history.tp + history.sl + history.time, history.trades);
+  assert.equal(history.tp + history.sl + history.trail + history.time, history.trades);
   assert.match(formatSignalHistory(history, 3), /Geçmiş \(3 yıl\): \d+ sinyal/);
 
   const none = { trades: 0, tp: 0, sl: 0, time: 0, winRate: null, avgReturn: null };
   assert.match(formatSignalHistory(none, 3), /daha önce çıkmadı/);
   assert.equal(formatSignalHistory(null, 3), null);
+});
+
+test("takip eden stoplu simülasyon: hedef yok, stop yükselir, kapanış 'trail' ya da 'sl'", () => {
+  const rand = rng(11);
+  const benchSteps = Array.from({ length: 700 }, () => 0.0008 + (rand() - 0.5) * 0.02);
+  const bench = makeBars(series(10000, benchSteps));
+  const stock = makeBars(series(100, benchSteps.map((r) => r * 1.1 + 0.0004 + (rand() - 0.5) * 0.02)), { volume: 2_000_000 });
+  const config = getConfig({ enableReversal: true });
+  const contexts = buildMarketContexts(bench, config);
+  const trades = simulateSymbol("TEST.IS", stock, contexts, { config, trailAtr: 3, maxHoldBars: 60 });
+  assert.ok(trades.length > 0);
+  for (const t of trades) {
+    assert.ok(["trail", "sl", "time", "open"].includes(t.outcome), t.outcome);
+    if (t.outcome === "trail") assert.ok(t.exit > t.sl * 0.9);
+  }
 });
